@@ -1,6 +1,6 @@
 'use server';
 
-import { sql } from '@/lib/db';
+import { createClient } from '@/lib/supabase/server';
 import { cookies } from 'next/headers';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
@@ -23,7 +23,7 @@ function encodeSession(payload: JudgeSessionPayload): string {
   return Buffer.from(JSON.stringify(payload)).toString('base64url');
 }
 
-export function decodeJudgeSession(value: string): JudgeSessionPayload | null {
+export async function decodeJudgeSession(value: string): Promise<JudgeSessionPayload | null> {
   try {
     const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf-8'));
     if (parsed && parsed.judgeId && parsed.madrassaId && parsed.subdomain) {
@@ -39,7 +39,7 @@ export async function getCurrentJudgeSession(): Promise<JudgeSessionPayload | nu
   const cookieStore = await cookies();
   const raw = cookieStore.get(SESSION_COOKIE)?.value;
   if (!raw) return null;
-  return decodeJudgeSession(raw);
+  return await decodeJudgeSession(raw);
 }
 
 export async function createJudgeAccount(
@@ -55,23 +55,33 @@ export async function createJudgeAccount(
       return { success: false, message: 'PIN must be 4-6 digits.' };
     }
 
-    const existing = await sql`
-      SELECT id FROM users
-      WHERE madrassa_id = ${madrassaId} AND phone = ${phone} AND role = 'judge'
-      LIMIT 1
-    `;
+    const supabase = await createClient();
 
-    if (existing.length > 0) {
+    const { data: existing } = await supabase
+      .from('users')
+      .select('id')
+      .eq('madrassa_id', madrassaId)
+      .eq('phone', phone)
+      .eq('role', 'judge')
+      .single();
+
+    if (existing) {
       return { success: false, message: 'A judge with this phone number already exists.' };
     }
 
     const pinHash = await bcrypt.hash(pin, 10);
     const userId = randomUUID();
 
-    await sql`
-      INSERT INTO users (id, madrassa_id, phone, pin_hash, role, created_at)
-      VALUES (${userId}, ${madrassaId}, ${phone}, ${pinHash}, 'judge', now())
-    `;
+    const { error } = await supabase.from('users').insert({
+      id: userId,
+      madrassa_id: madrassaId,
+      phone,
+      pin_hash: pinHash,
+      role: 'judge',
+      created_at: new Date().toISOString()
+    } as any);
+
+    if (error) throw error;
 
     return { success: true, data: { userId } };
   } catch (error) {
@@ -86,30 +96,40 @@ export async function loginJudge(
   pin: string
 ): Promise<ActionResult<{ judgeId: string; madrassaId: string }>> {
   try {
-    const rows = await sql`
-      SELECT u.id AS judge_id, u.pin_hash, u.madrassa_id
-      FROM users u
-      JOIN madrassas m ON m.id = u.madrassa_id
-      WHERE m.subdomain = ${subdomain}
-        AND u.phone = ${phone}
-        AND u.role = 'judge'
-      LIMIT 1
-    `;
+    const supabase = await createClient();
 
-    if (rows.length === 0) {
+    const { data: madrassa } = await supabase
+      .from('madrassas')
+      .select('id')
+      .eq('subdomain', subdomain)
+      .single();
+
+    if (!madrassa) {
+      return { success: false, message: 'Invalid domain.' };
+    }
+
+    const { data: userRaw } = await supabase
+      .from('users')
+      .select('id, pin_hash, madrassa_id')
+      .eq('phone', phone)
+      .eq('role', 'judge')
+      .eq('madrassa_id', (madrassa as any).id)
+      .single();
+
+    const user = userRaw as any;
+
+    if (!user) {
       return { success: false, message: 'Invalid phone number or PIN.' };
     }
 
-    const row = rows[0] as { judge_id: string; pin_hash: string; madrassa_id: string };
-    const validPin = await bcrypt.compare(pin, row.pin_hash);
-
+    const validPin = await bcrypt.compare(pin, user.pin_hash);
     if (!validPin) {
       return { success: false, message: 'Invalid phone number or PIN.' };
     }
 
     const sessionValue = encodeSession({
-      judgeId: row.judge_id,
-      madrassaId: row.madrassa_id,
+      judgeId: user.id,
+      madrassaId: user.madrassa_id,
       subdomain,
     });
 
@@ -124,7 +144,7 @@ export async function loginJudge(
 
     return {
       success: true,
-      data: { judgeId: row.judge_id, madrassaId: row.madrassa_id },
+      data: { judgeId: user.id, madrassaId: user.madrassa_id },
     };
   } catch (error) {
     console.error('loginJudge error:', error);
@@ -149,36 +169,46 @@ export interface AssignedEvent {
 
 export async function getAssignedEvents(judgeId: string): Promise<ActionResult<AssignedEvent[]>> {
   try {
-    const rows = await sql`
-      SELECT
-        e.id,
-        e.name,
-        e.category,
-        e.status,
-        e.scheduled_at,
-        e.rubrics
-      FROM event_judges ej
-      JOIN events e ON e.id = ej.event_id
-      WHERE ej.judge_id = ${judgeId}
-      ORDER BY e.scheduled_at ASC NULLS LAST, e.name ASC
-    `;
+    const supabase = await createClient();
 
-    const events: AssignedEvent[] = rows.map((r: any) => ({
-      id: r.id,
-      name: r.name,
-      category: r.category,
-      status: r.status,
-      scheduledAt: r.scheduled_at ? new Date(r.scheduled_at).toISOString() : null,
-      rubrics: Array.isArray(r.rubrics)
-        ? r.rubrics
-        : typeof r.rubrics === 'string'
-        ? JSON.parse(r.rubrics)
-        : [
-            { key: 'rhythm', label: 'Rhythm', maxScore: 10 },
-            { key: 'content', label: 'Content', maxScore: 10 },
-            { key: 'expression', label: 'Expression', maxScore: 10 },
-          ],
-    }));
+    const { data, error } = await supabase
+      .from('event_judges')
+      .select(`
+        events (
+          id, name, category, status, scheduled_at, rubrics
+        )
+      `)
+      .eq('judge_id', judgeId);
+
+    if (error) throw error;
+
+    const events: AssignedEvent[] = ((data as any[]) || []).map((r: any) => {
+      const e = r.events;
+      return {
+        id: e.id,
+        name: e.name,
+        category: e.category,
+        status: e.status,
+        scheduledAt: e.scheduled_at ? new Date(e.scheduled_at).toISOString() : null,
+        rubrics: Array.isArray(e.rubrics)
+          ? e.rubrics
+          : typeof e.rubrics === 'string'
+          ? JSON.parse(e.rubrics)
+          : [
+              { key: 'rhythm', label: 'Rhythm', maxScore: 10 },
+              { key: 'content', label: 'Content', maxScore: 10 },
+              { key: 'expression', label: 'Expression', maxScore: 10 },
+            ],
+      };
+    });
+
+    // Sort by scheduledAt then name
+    events.sort((a, b) => {
+      if (a.scheduledAt === b.scheduledAt) return a.name.localeCompare(b.name);
+      if (!a.scheduledAt) return 1;
+      if (!b.scheduledAt) return -1;
+      return new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime();
+    });
 
     return { success: true, data: events };
   } catch (error) {
@@ -201,54 +231,42 @@ export async function getEventParticipantsByCodeLetter(
   judgeId?: string
 ): Promise<ActionResult<JudgeParticipant[]>> {
   try {
-    const individualRows = await sql`
-      SELECT
-        ep.id AS participant_id,
-        ep.code_letter,
-        s.score_data,
-        s.total_score
-      FROM event_participants ep
-      LEFT JOIN scores s
-        ON s.participant_id = ep.id
-        AND s.participant_type = 'individual'
-        AND s.event_id = ${eventId}
-        AND s.judge_id = ${judgeId ?? null}
-      WHERE ep.event_id = ${eventId} AND ep.participant_type = 'individual'
-      ORDER BY ep.code_letter ASC
-    `;
+    const supabase = await createClient();
 
-    const squadRows = await sql`
-      SELECT
-        es.id AS participant_id,
-        es.code_letter,
-        s.score_data,
-        s.total_score
-      FROM event_squads es
-      LEFT JOIN scores s
-        ON s.participant_id = es.id
-        AND s.participant_type = 'squad'
-        AND s.event_id = ${eventId}
-        AND s.judge_id = ${judgeId ?? null}
-      WHERE es.event_id = ${eventId}
-      ORDER BY es.code_letter ASC
-    `;
+    const [
+      { data: individualRows },
+      { data: squadRows },
+      { data: scores }
+    ] = await Promise.all([
+      supabase.from('event_participants').select('id, code_letter').eq('event_id', eventId).eq('participant_type', 'individual'),
+      supabase.from('event_squads').select('id, code_letter').eq('event_id', eventId),
+      judgeId ? supabase.from('scores').select('participant_id, score_data, total_score').eq('event_id', eventId).eq('judge_id', judgeId) : Promise.resolve({ data: [] })
+    ]);
 
-    const mapRow = (r: any, type: 'individual' | 'squad'): JudgeParticipant => ({
-      participantId: r.participant_id,
-      participantType: type,
-      codeLetter: r.code_letter,
-      alreadyScored: r.total_score !== null && r.total_score !== undefined,
-      existingScoreData: r.score_data
-        ? typeof r.score_data === 'string'
-          ? JSON.parse(r.score_data)
-          : r.score_data
-        : null,
-      existingTotalScore: r.total_score !== null && r.total_score !== undefined ? Number(r.total_score) : null,
-    });
+    const scoreMap = new Map<string, any>();
+    for (const s of (scores as any[]) || []) {
+      scoreMap.set(s.participant_id, s);
+    }
+
+    const mapRow = (r: any, type: 'individual' | 'squad'): JudgeParticipant => {
+      const s = scoreMap.get(r.id);
+      return {
+        participantId: r.id,
+        participantType: type,
+        codeLetter: r.code_letter,
+        alreadyScored: !!(s && s.total_score !== null),
+        existingScoreData: s?.score_data
+          ? typeof s.score_data === 'string'
+            ? JSON.parse(s.score_data)
+            : s.score_data
+          : null,
+        existingTotalScore: s?.total_score !== null && s?.total_score !== undefined ? Number(s.total_score) : null,
+      };
+    };
 
     const participants: JudgeParticipant[] = [
-      ...individualRows.map((r: any) => mapRow(r, 'individual')),
-      ...squadRows.map((r: any) => mapRow(r, 'squad')),
+      ...((individualRows as any[]) || []).map((r: any) => mapRow(r, 'individual')),
+      ...((squadRows as any[]) || []).map((r: any) => mapRow(r, 'squad')),
     ].sort((a, b) => a.codeLetter.localeCompare(b.codeLetter));
 
     return { success: true, data: participants };
@@ -272,41 +290,24 @@ export async function submitJudgeScore(
       return { success: false, message: 'Total score cannot be negative.' };
     }
 
-    const existing = await sql`
-      SELECT id FROM scores
-      WHERE madrassa_id = ${madrassaId}
-        AND event_id = ${eventId}
-        AND judge_id = ${judgeId}
-        AND participant_type = ${participantType}
-        AND participant_id = ${participantId}
-      LIMIT 1
-    `;
+    const supabase = await createClient();
 
-    const scoreDataStr = JSON.stringify(scoreDataJson);
+    const upsertData = {
+      madrassa_id: madrassaId,
+      event_id: eventId,
+      judge_id: judgeId,
+      participant_type: participantType,
+      participant_id: participantId,
+      score_data: scoreDataJson,
+      total_score: totalScore,
+      updated_at: new Date().toISOString()
+    };
 
-    if (existing.length > 0) {
-      await sql`
-        UPDATE scores
-        SET score_data = ${scoreDataStr}::jsonb,
-            total_score = ${totalScore},
-            updated_at = now()
-        WHERE id = ${existing[0].id}
-      `;
-    } else {
-      const scoreId = randomUUID();
-      await sql`
-        INSERT INTO scores (
-          id, madrassa_id, event_id, judge_id,
-          participant_type, participant_id,
-          score_data, total_score, created_at, updated_at
-        )
-        VALUES (
-          ${scoreId}, ${madrassaId}, ${eventId}, ${judgeId},
-          ${participantType}, ${participantId},
-          ${scoreDataStr}::jsonb, ${totalScore}, now(), now()
-        )
-      `;
-    }
+    const { error } = await supabase.from('scores').upsert(upsertData as any, {
+      onConflict: 'event_id,judge_id,participant_id'
+    });
+
+    if (error) throw error;
 
     return { success: true };
   } catch (error) {
@@ -329,55 +330,44 @@ export async function calculateMultiJudgeAverage(
   eventId: string
 ): Promise<ActionResult<AggregatedParticipantScore[]>> {
   try {
-    const individualRows = await sql`
-      SELECT
-        ep.id AS participant_id,
-        ep.code_letter,
-        s.judge_id,
-        s.total_score
-      FROM event_participants ep
-      LEFT JOIN scores s
-        ON s.participant_id = ep.id
-        AND s.participant_type = 'individual'
-        AND s.event_id = ${eventId}
-        AND s.madrassa_id = ${madrassaId}
-      WHERE ep.event_id = ${eventId} AND ep.participant_type = 'individual'
-    `;
+    const supabase = await createClient();
 
-    const squadRows = await sql`
-      SELECT
-        es.id AS participant_id,
-        es.code_letter,
-        s.judge_id,
-        s.total_score
-      FROM event_squads es
-      LEFT JOIN scores s
-        ON s.participant_id = es.id
-        AND s.participant_type = 'squad'
-        AND s.event_id = ${eventId}
-        AND s.madrassa_id = ${madrassaId}
-      WHERE es.event_id = ${eventId}
-    `;
+    const [
+      { data: individualRows },
+      { data: squadRows },
+      { data: scores }
+    ] = await Promise.all([
+      supabase.from('event_participants').select('id, code_letter').eq('event_id', eventId).eq('participant_type', 'individual'),
+      supabase.from('event_squads').select('id, code_letter').eq('event_id', eventId),
+      supabase.from('scores').select('participant_id, judge_id, total_score').eq('event_id', eventId).eq('madrassa_id', madrassaId)
+    ]);
 
-    const grouped = new Map
+    const grouped = new Map<
       string,
       { codeLetter: string; participantType: 'individual' | 'squad'; scores: { judgeId: string; totalScore: number }[] }
     >();
 
     const consume = (rows: any[], type: 'individual' | 'squad') => {
       for (const r of rows) {
-        const key = `${type}:${r.participant_id}`;
+        const key = `${type}:${r.id}`;
         if (!grouped.has(key)) {
           grouped.set(key, { codeLetter: r.code_letter, participantType: type, scores: [] });
-        }
-        if (r.judge_id !== null && r.total_score !== null && r.total_score !== undefined) {
-          grouped.get(key)!.scores.push({ judgeId: r.judge_id, totalScore: Number(r.total_score) });
         }
       }
     };
 
-    consume(individualRows, 'individual');
-    consume(squadRows, 'squad');
+    consume((individualRows as any[]) || [], 'individual');
+    consume((squadRows as any[]) || [], 'squad');
+
+    for (const s of (scores as any[]) || []) {
+      const keyInd = `individual:${s.participant_id}`;
+      const keySq = `squad:${s.participant_id}`;
+      
+      const targetKey = grouped.has(keyInd) ? keyInd : (grouped.has(keySq) ? keySq : null);
+      if (targetKey && s.total_score !== null) {
+        grouped.get(targetKey)!.scores.push({ judgeId: s.judge_id, totalScore: Number(s.total_score) });
+      }
+    }
 
     const results: AggregatedParticipantScore[] = Array.from(grouped.entries()).map(([key, value]) => {
       const participantId = key.split(':')[1];

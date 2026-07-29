@@ -260,7 +260,7 @@ function StudentsTab() {
         setStudents(
           students.map((s, i) => ({
             ...s,
-            register_number_3digit: result?.[i]?.register_number_3digit,
+            register_number_3digit: (result as any[])?.[i]?.register_number_3digit,
           }))
         );
         setImported(true);

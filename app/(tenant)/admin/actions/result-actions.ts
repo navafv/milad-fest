@@ -1,7 +1,8 @@
 'use server';
 
-import { sql } from '@/lib/db';
+import { createClient } from '@/lib/supabase/server';
 import { randomUUID } from 'crypto';
+import { revalidatePath } from 'next/cache';
 
 interface ActionResult<T = undefined> {
   success: boolean;
@@ -26,50 +27,27 @@ export async function getEventScoreboard(
   eventId: string
 ): Promise<ActionResult<ScoreboardEntry[]>> {
   try {
-    const individualRows = await sql`
-      SELECT
-        ep.id AS participant_id,
-        ep.code_letter,
-        NULL::text AS team_id,
-        s.judge_id,
-        s.total_score
-      FROM event_participants ep
-      LEFT JOIN scores s
-        ON s.participant_id = ep.id
-        AND s.participant_type = 'individual'
-        AND s.event_id = ${eventId}
-        AND s.madrassa_id = ${madrassaId}
-      WHERE ep.event_id = ${eventId} AND ep.participant_type = 'individual'
-    `;
+    const supabase = await createClient();
 
-    const squadRows = await sql`
-      SELECT
-        es.id AS participant_id,
-        es.code_letter,
-        es.team_id::text AS team_id,
-        s.judge_id,
-        s.total_score
-      FROM event_squads es
-      LEFT JOIN scores s
-        ON s.participant_id = es.id
-        AND s.participant_type = 'squad'
-        AND s.event_id = ${eventId}
-        AND s.madrassa_id = ${madrassaId}
-      WHERE es.event_id = ${eventId}
-    `;
-
-    const overrideRows = await sql`
-      SELECT participant_id, participant_type, override_rank
-      FROM rank_overrides
-      WHERE madrassa_id = ${madrassaId} AND event_id = ${eventId}
-    `;
+    // Fetch all related data in parallel using Supabase
+    const [
+      { data: individualRows },
+      { data: squadRows },
+      { data: scores },
+      { data: overrides }
+    ] = await Promise.all([
+      supabase.from('event_participants').select('id, code_letter').eq('event_id', eventId).eq('participant_type', 'individual'),
+      supabase.from('event_squads').select('id, code_letter, team_id').eq('event_id', eventId),
+      supabase.from('scores').select('participant_id, participant_type, judge_id, total_score').eq('event_id', eventId).eq('madrassa_id', madrassaId),
+      supabase.from('rank_overrides').select('participant_id, participant_type, override_rank').eq('event_id', eventId).eq('madrassa_id', madrassaId)
+    ]);
 
     const overrideMap = new Map<string, number>();
-    for (const r of overrideRows as any[]) {
+    for (const r of (overrides as any[]) || []) {
       overrideMap.set(`${r.participant_type}:${r.participant_id}`, Number(r.override_rank));
     }
 
-    const grouped = new Map
+    const grouped = new Map<
       string,
       {
         participantId: string;
@@ -82,24 +60,29 @@ export async function getEventScoreboard(
 
     const consume = (rows: any[], type: 'individual' | 'squad') => {
       for (const r of rows) {
-        const key = `${type}:${r.participant_id}`;
+        const key = `${type}:${r.id}`;
         if (!grouped.has(key)) {
           grouped.set(key, {
-            participantId: r.participant_id,
+            participantId: r.id,
             participantType: type,
             codeLetter: r.code_letter,
-            teamId: r.team_id,
+            teamId: r.team_id || null,
             scores: [],
           });
-        }
-        if (r.judge_id !== null && r.total_score !== null && r.total_score !== undefined) {
-          grouped.get(key)!.scores.push(Number(r.total_score));
         }
       }
     };
 
-    consume(individualRows, 'individual');
-    consume(squadRows, 'squad');
+    consume((individualRows as any[]) || [], 'individual');
+    consume((squadRows as any[]) || [], 'squad');
+
+    // Attach scores
+    for (const s of (scores as any[]) || []) {
+      const key = `${s.participant_type}:${s.participant_id}`;
+      if (grouped.has(key) && s.total_score !== null) {
+        grouped.get(key)!.scores.push(Number(s.total_score));
+      }
+    }
 
     const baseEntries = Array.from(grouped.values()).map((v) => {
       const judgeCount = v.scores.length;
@@ -121,7 +104,6 @@ export async function getEventScoreboard(
 
     let rank = 0;
     let prevScore: number | null = null;
-    let skip = 0;
     const scoreCounts = new Map<number, number>();
     for (const e of baseEntries) {
       scoreCounts.set(e.averageScore, (scoreCounts.get(e.averageScore) ?? 0) + 1);
@@ -160,41 +142,30 @@ export async function overrideRanksAndTieBreakers(
   rankOverrides: RankOverrideInput[]
 ): Promise<ActionResult> {
   try {
+    const supabase = await createClient();
+
     for (const o of rankOverrides) {
       if (!Number.isInteger(o.rank) || o.rank < 1) {
         return { success: false, message: `Invalid rank for participant ${o.participantId}.` };
       }
     }
 
-    for (const o of rankOverrides) {
-      const existing = await sql`
-        SELECT id FROM rank_overrides
-        WHERE madrassa_id = ${madrassaId}
-          AND event_id = ${eventId}
-          AND participant_id = ${o.participantId}
-          AND participant_type = ${o.participantType}
-        LIMIT 1
-      `;
+    const upserts = rankOverrides.map(o => ({
+      madrassa_id: madrassaId,
+      event_id: eventId,
+      participant_id: o.participantId,
+      participant_type: o.participantType,
+      override_rank: o.rank,
+      updated_at: new Date().toISOString()
+    }));
 
-      if (existing.length > 0) {
-        await sql`
-          UPDATE rank_overrides
-          SET override_rank = ${o.rank}, updated_at = now()
-          WHERE id = ${existing[0].id}
-        `;
-      } else {
-        const id = randomUUID();
-        await sql`
-          INSERT INTO rank_overrides (
-            id, madrassa_id, event_id, participant_id, participant_type, override_rank, created_at, updated_at
-          )
-          VALUES (
-            ${id}, ${madrassaId}, ${eventId}, ${o.participantId}, ${o.participantType}, ${o.rank}, now(), now()
-          )
-        `;
-      }
-    }
+    const { error } = await supabase.from('rank_overrides').upsert(upserts as any, {
+      onConflict: 'madrassa_id,event_id,participant_id'
+    });
 
+    if (error) throw error;
+
+    revalidatePath('/admin/results');
     return { success: true };
   } catch (error) {
     console.error('overrideRanksAndTieBreakers error:', error);
@@ -217,18 +188,21 @@ export async function publishEventResults(
   eventId: string
 ): Promise<ActionResult<{ publishedCount: number }>> {
   try {
-    const eventRows = await sql`
-      SELECT id, participant_mode, point_rules
-      FROM events
-      WHERE id = ${eventId} AND madrassa_id = ${madrassaId}
-      LIMIT 1
-    `;
+    const supabase = await createClient();
 
-    if (eventRows.length === 0) {
+    const { data: rawEventRow, error: eventError } = await supabase
+      .from('events')
+      .select('id, participant_mode, point_rules')
+      .eq('id', eventId)
+      .eq('madrassa_id', madrassaId)
+      .single();
+
+    if (eventError || !rawEventRow) {
       return { success: false, message: 'Event not found.' };
     }
 
-    const eventRow = eventRows[0] as any;
+    const eventRow = rawEventRow as any;
+
     const pointRules: EventPointRules = eventRow.point_rules
       ? typeof eventRow.point_rules === 'string'
         ? JSON.parse(eventRow.point_rules)
@@ -256,62 +230,41 @@ export async function publishEventResults(
       finalRank: entry.overrideRank ?? entry.autoRank,
     }));
 
-    let publishedCount = 0;
-
-    for (const entry of finalized) {
+    const resultsToUpsert = finalized.map(entry => {
       const rulesForType = entry.participantType === 'squad' ? pointRules.group : pointRules.individual;
       const matchingRule = rulesForType.find((r) => r.rank === entry.finalRank);
       const points = matchingRule ? matchingRule.points : 0;
       const teamId = entry.participantType === 'squad' ? entry.teamId : null;
 
-      const existing = await sql`
-        SELECT id FROM results
-        WHERE madrassa_id = ${madrassaId}
-          AND event_id = ${eventId}
-          AND participant_id = ${entry.participantId}
-          AND participant_type = ${entry.participantType}
-        LIMIT 1
-      `;
+      return {
+        madrassa_id: madrassaId,
+        event_id: eventId,
+        participant_id: entry.participantId,
+        participant_type: entry.participantType,
+        code_letter: entry.codeLetter,
+        average_score: entry.averageScore,
+        final_rank: entry.finalRank,
+        points_awarded: points,
+        team_id: teamId,
+        is_published: true,
+        published_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+    });
 
-      if (existing.length > 0) {
-        await sql`
-          UPDATE results
-          SET
-            average_score = ${entry.averageScore},
-            final_rank = ${entry.finalRank},
-            points_awarded = ${points},
-            team_id = ${teamId},
-            is_published = true,
-            published_at = now(),
-            updated_at = now()
-          WHERE id = ${existing[0].id}
-        `;
-      } else {
-        const id = randomUUID();
-        await sql`
-          INSERT INTO results (
-            id, madrassa_id, event_id, participant_id, participant_type,
-            code_letter, average_score, final_rank, points_awarded, team_id,
-            is_published, published_at, created_at, updated_at
-          )
-          VALUES (
-            ${id}, ${madrassaId}, ${eventId}, ${entry.participantId}, ${entry.participantType},
-            ${entry.codeLetter}, ${entry.averageScore}, ${entry.finalRank}, ${points}, ${teamId},
-            true, now(), now(), now()
-          )
-        `;
-      }
+    const { error: upsertError } = await supabase.from('results').upsert(resultsToUpsert as any, {
+      onConflict: 'madrassa_id,event_id,participant_id'
+    });
 
-      publishedCount += 1;
-    }
+    if (upsertError) throw upsertError;
 
-    await sql`
-      UPDATE events
-      SET status = 'published', updated_at = now()
-      WHERE id = ${eventId} AND madrassa_id = ${madrassaId}
-    `;
+    await (supabase.from('events') as any)
+      .update({ status: 'published', updated_at: new Date().toISOString() })
+      .eq('id', eventId)
+      .eq('madrassa_id', madrassaId);
 
-    return { success: true, data: { publishedCount } };
+    revalidatePath('/admin/results');
+    return { success: true, data: { publishedCount: resultsToUpsert.length } };
   } catch (error) {
     console.error('publishEventResults error:', error);
     return { success: false, message: 'Failed to publish results.' };
@@ -327,21 +280,17 @@ export interface EventOption {
 
 export async function getEventsForAudit(madrassaId: string): Promise<ActionResult<EventOption[]>> {
   try {
-    const rows = await sql`
-      SELECT id, name, category, status
-      FROM events
-      WHERE madrassa_id = ${madrassaId}
-      ORDER BY scheduled_at ASC NULLS LAST, name ASC
-    `;
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from('events')
+      .select('id, name, category, status')
+      .eq('madrassa_id', madrassaId)
+      .order('scheduled_at', { ascending: true, nullsFirst: false })
+      .order('name', { ascending: true });
 
-    const events: EventOption[] = rows.map((r: any) => ({
-      id: r.id,
-      name: r.name,
-      category: r.category,
-      status: r.status,
-    }));
+    if (error) throw error;
 
-    return { success: true, data: events };
+    return { success: true, data: (data as any[]) as EventOption[] };
   } catch (error) {
     console.error('getEventsForAudit error:', error);
     return { success: false, message: 'Failed to load events.' };

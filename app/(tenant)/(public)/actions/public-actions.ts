@@ -1,6 +1,6 @@
 'use server';
 
-import { sql } from '@/lib/db';
+import { createClient } from "@/lib/supabase/server";
 
 interface ActionResult<T = undefined> {
   success: boolean;
@@ -20,27 +20,34 @@ export interface ScheduleItem {
 
 export async function getPublicSchedule(madrassaId: string): Promise<ActionResult<ScheduleItem[]>> {
   try {
-    const rows = await sql`
-      SELECT
-        e.id AS event_id,
-        e.name AS event_name,
-        e.category,
-        e.status,
-        st.name AS stage_name,
-        es.start_time,
-        es.end_time
-      FROM event_schedules es
-      JOIN events e ON e.id = es.event_id
-      LEFT JOIN stages st ON st.id = es.stage_id
-      WHERE e.madrassa_id = ${madrassaId}
-      ORDER BY es.start_time ASC
-    `;
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from('event_schedules')
+      .select(`
+        start_time,
+        end_time,
+        status,
+        events (
+          id,
+          name,
+          categories (
+            name
+          )
+        ),
+        stages (
+          name
+        )
+      `)
+      .eq('madrassa_id', madrassaId)
+      .order('start_time', { ascending: true });
 
-    const items: ScheduleItem[] = rows.map((r: any) => ({
-      eventId: r.event_id,
-      eventName: r.event_name,
-      category: r.category,
-      stageName: r.stage_name,
+    if (error) throw error;
+
+    const items: ScheduleItem[] = ((data as any[]) || []).map((r: any) => ({
+      eventId: r.events?.id,
+      eventName: r.events?.name,
+      category: r.events?.categories?.name || null,
+      stageName: r.stages?.name || null,
       startTime: new Date(r.start_time).toISOString(),
       endTime: r.end_time ? new Date(r.end_time).toISOString() : null,
       status: r.status,
@@ -74,52 +81,63 @@ export async function getPublishedResults(
   madrassaId: string
 ): Promise<ActionResult<PublishedEventResult[]>> {
   try {
-    const rows = await sql`
-      SELECT
-        r.event_id,
-        e.name AS event_name,
-        e.category,
-        r.published_at,
-        r.participant_id,
-        r.participant_type,
-        r.code_letter,
-        r.final_rank,
-        r.points_awarded,
-        st.name AS student_name,
-        sg.name AS subgroup_name
-      FROM results r
-      JOIN events e ON e.id = r.event_id
-      LEFT JOIN students st
-        ON st.id = r.participant_id AND r.participant_type = 'individual'
-      LEFT JOIN event_subgroups sg
-        ON sg.id = r.participant_id AND r.participant_type = 'squad'
-      WHERE r.madrassa_id = ${madrassaId} AND r.is_published = true
-      ORDER BY e.name ASC, r.final_rank ASC
-    `;
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from('results')
+      .select(`
+        event_id,
+        published_at,
+        participant_id,
+        participant_type,
+        code_letter,
+        final_rank,
+        points_awarded,
+        events (
+          name,
+          categories (
+            name
+          )
+        ),
+        students (
+          name
+        ),
+        event_subgroups (
+          team_id
+        )
+      `)
+      .eq('madrassa_id', madrassaId)
+      .eq('is_published', true)
+      .lte('final_rank', 3)
+      .order('final_rank', { ascending: true });
+
+    if (error) throw error;
 
     const grouped = new Map<string, PublishedEventResult>();
 
-    for (const row of rows as any[]) {
+    // We cast to any[] here so TypeScript stops worrying about the complex joins
+    for (const row of (data as any[]) || []) {
       if (!grouped.has(row.event_id)) {
         grouped.set(row.event_id, {
           eventId: row.event_id,
-          eventName: row.event_name,
-          category: row.category,
+          eventName: row.events?.name || 'Unknown Event',
+          category: row.events?.categories?.name || null,
           publishedAt: row.published_at ? new Date(row.published_at).toISOString() : null,
           winners: [],
         });
       }
 
-      if (row.final_rank <= 3) {
-        grouped.get(row.event_id)!.winners.push({
-          participantId: row.participant_id,
-          participantType: row.participant_type,
-          codeLetter: row.code_letter,
-          displayName: row.participant_type === 'individual' ? row.student_name : row.subgroup_name,
-          finalRank: Number(row.final_rank),
-          pointsAwarded: Number(row.points_awarded),
-        });
-      }
+      let displayName = row.participant_type === 'individual' 
+        ? row.students?.name 
+        : `Squad ${row.code_letter}`;
+
+      grouped.get(row.event_id)!.winners.push({
+        participantId: row.participant_id,
+        participantType: row.participant_type as 'individual' | 'squad',
+        codeLetter: row.code_letter,
+        displayName: displayName || null,
+        finalRank: Number(row.final_rank),
+        pointsAwarded: Number(row.points_awarded),
+      });
     }
 
     const results = Array.from(grouped.values()).map((event) => ({
@@ -147,34 +165,46 @@ export async function getTeamLeaderboard(
   madrassaId: string
 ): Promise<ActionResult<TeamLeaderboardEntry[]>> {
   try {
-    const rows = await sql`
-      SELECT
-        t.id AS team_id,
-        t.name AS team_name,
-        COALESCE(SUM(r.points_awarded), 0) AS total_points
-      FROM teams t
-      LEFT JOIN results r
-        ON r.team_id = t.id
-        AND r.madrassa_id = ${madrassaId}
-        AND r.is_published = true
-      WHERE t.madrassa_id = ${madrassaId}
-      GROUP BY t.id, t.name
-      ORDER BY total_points DESC, t.name ASC
-    `;
+    const supabase = await createClient();
+
+    const { data: teams, error: teamsError } = await supabase
+      .from('teams')
+      .select('id, name')
+      .eq('madrassa_id', madrassaId);
+
+    if (teamsError) throw teamsError;
+
+    const { data: results, error: resultsError } = await supabase
+      .from('results')
+      .select('team_id, points_awarded')
+      .eq('madrassa_id', madrassaId)
+      .eq('is_published', true)
+      .not('team_id', 'is', null);
+
+    if (resultsError) throw resultsError;
+
+    const teamPoints = new Map<string, number>();
+    for (const row of (results as any[]) || []) {
+      const current = teamPoints.get(row.team_id) || 0;
+      teamPoints.set(row.team_id, current + (Number(row.points_awarded) || 0));
+    }
+
+    const scoredTeams = ((teams as any[]) || []).map((t: any) => ({
+      teamId: t.id,
+      teamName: t.name,
+      totalPoints: teamPoints.get(t.id) || 0
+    })).sort((a, b) => b.totalPoints - a.totalPoints || a.teamName.localeCompare(b.teamName));
 
     let rank = 0;
     let prevPoints: number | null = null;
 
-    const entries: TeamLeaderboardEntry[] = rows.map((r: any, idx: number) => {
-      const totalPoints = Number(r.total_points);
-      if (prevPoints === null || totalPoints !== prevPoints) {
+    const entries: TeamLeaderboardEntry[] = scoredTeams.map((team, idx) => {
+      if (prevPoints === null || team.totalPoints !== prevPoints) {
         rank = idx + 1;
-        prevPoints = totalPoints;
+        prevPoints = team.totalPoints;
       }
       return {
-        teamId: r.team_id,
-        teamName: r.team_name,
-        totalPoints,
+        ...team,
         rank,
       };
     });

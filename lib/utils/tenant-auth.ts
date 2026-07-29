@@ -51,8 +51,8 @@ export async function verifyTenantAccess(madrassaId: string): Promise<void> {
       .eq("id", user.id)
       .single();
 
-    if (!profileError && profile?.madrassa_id) {
-      sessionMadrassaId = profile.madrassa_id as string;
+    if (!profileError && (profile as any)?.madrassa_id) {
+      sessionMadrassaId = (profile as any).madrassa_id as string;
     }
   }
 

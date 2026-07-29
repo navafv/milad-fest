@@ -12,7 +12,7 @@ export async function createTeam(
 
   const { data, error } = await supabase
     .from("teams")
-    .insert({ madrassa_id: madrassaId, name, color_code: colorCode })
+    .insert({ madrassa_id: madrassaId, name, color_code: colorCode } as any)
     .select()
     .single();
 
@@ -37,7 +37,7 @@ export async function createCategory(
       name,
       starting_number: startingNumber,
       is_general: isGeneral,
-    })
+    } as any)
     .select()
     .single();
 
@@ -73,7 +73,7 @@ export async function bulkImportStudents(
 
   // Map categoryId -> next register number counter
   const categoryCounters: Record<string, number> = {};
-  for (const cat of categories ?? []) {
+  for (const cat of (categories as any[]) ?? []) {
     categoryCounters[cat.id] = cat.starting_number;
   }
 
@@ -87,7 +87,7 @@ export async function bulkImportStudents(
   if (existErr) throw new Error(existErr.message);
 
   // Advance counters past existing max
-  for (const s of existingStudents ?? []) {
+  for (const s of (existingStudents as any[]) ?? []) {
     const current = categoryCounters[s.category_id] ?? 1;
     if (s.register_number_3digit >= current) {
       categoryCounters[s.category_id] = s.register_number_3digit + 1;
@@ -111,7 +111,7 @@ export async function bulkImportStudents(
 
   const { data, error } = await supabase
     .from("students")
-    .insert(toInsert)
+    .insert(toInsert as any)
     .select();
 
   if (error) throw new Error(error.message);
