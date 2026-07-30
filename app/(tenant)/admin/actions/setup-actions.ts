@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import { requireAdminSession } from "@/lib/utils/tenant-auth";
+import { verifySession } from "@/app/(tenant)/admin/actions/auth-actions";
 
 interface ActionResult<T = undefined> {
   success: boolean;
@@ -11,12 +11,13 @@ interface ActionResult<T = undefined> {
 }
 
 export async function createTeam(
-  madrassaId: string,
   name: string,
   colorCode: string
 ): Promise<ActionResult<any>> {
   try {
-    await requireAdminSession(madrassaId);
+    const session = await verifySession();
+    if (!session) return { success: false, message: "Unauthorized" };
+    const madrassaId = session.madrassa_id;
 
     const supabase = await createClient();
 
@@ -40,13 +41,14 @@ export async function createTeam(
 }
 
 export async function createCategory(
-  madrassaId: string,
   name: string,
   startingNumber: number,
   isGeneral: boolean
 ): Promise<ActionResult<any>> {
   try {
-    await requireAdminSession(madrassaId);
+    const session = await verifySession();
+    if (!session) return { success: false, message: "Unauthorized" };
+    const madrassaId = session.madrassa_id;
 
     const supabase = await createClient();
 
@@ -83,11 +85,12 @@ interface StudentRow {
 }
 
 export async function bulkImportStudents(
-  madrassaId: string,
   studentsArray: StudentRow[]
 ): Promise<ActionResult<any>> {
   try {
-    await requireAdminSession(madrassaId);
+    const session = await verifySession();
+    if (!session) return { success: false, message: "Unauthorized" };
+    const madrassaId = session.madrassa_id;
 
     const supabase = await createClient();
 

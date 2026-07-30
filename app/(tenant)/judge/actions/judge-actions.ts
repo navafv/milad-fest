@@ -194,16 +194,15 @@ export interface AssignedEvent {
   rubrics: { key: string; label: string; maxScore: number }[];
 }
 
-export async function getAssignedEvents(judgeId: string): Promise<ActionResult<AssignedEvent[]>> {
+export async function getAssignedEvents(): Promise<ActionResult<AssignedEvent[]>> {
   try {
     const session = await getCurrentJudgeSession();
     if (!session) {
       return { success: false, message: 'Unauthorized: no active judge session.' };
     }
-    if (session.judgeId !== judgeId) {
-      return { success: false, message: 'Forbidden: judge mismatch.' };
-    }
 
+    const judgeId = session.judgeId; 
+    
     const supabase = await createClient();
 
     const { data, error } = await supabase
@@ -262,11 +261,17 @@ export interface JudgeParticipant {
 }
 
 export async function getEventParticipantsByCodeLetter(
-  madrassaId: string,
-  eventId: string,
-  judgeId?: string
+  eventId: string
 ): Promise<ActionResult<JudgeParticipant[]>> {
   try {
+    const session = await getCurrentJudgeSession();
+    if (!session) {
+      return { success: false, message: 'Unauthorized: no active judge session.' };
+    }
+    
+    const madrassaId = session.madrassaId;
+    const judgeId = session.judgeId; 
+
     const supabase = await createClient();
 
     const [
@@ -383,10 +388,16 @@ export interface AggregatedParticipantScore {
 }
 
 export async function calculateMultiJudgeAverage(
-  madrassaId: string,
   eventId: string
 ): Promise<ActionResult<AggregatedParticipantScore[]>> {
   try {
+    const session = await getCurrentJudgeSession();
+    if (!session) {
+      return { success: false, message: 'Unauthorized: no active judge session.' };
+    }
+    
+    const madrassaId = session.madrassaId;
+
     const supabase = await createClient();
 
     const [

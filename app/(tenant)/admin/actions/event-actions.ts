@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import { requireAdminSession } from "@/lib/utils/tenant-auth";
+import { verifySession } from "@/app/(tenant)/admin/actions/auth-actions";
 
 interface ActionResult<T = undefined> {
   success: boolean;
@@ -13,7 +13,6 @@ interface ActionResult<T = undefined> {
 // ── Create Event ───────────────────────────────────────────────────────────
 
 export async function createEvent({
-  madrassaId,
   name,
   categoryId,
   isGeneral,
@@ -23,7 +22,6 @@ export async function createEvent({
   pointsSingle,
   pointsGroup,
 }: {
-  madrassaId: string;
   name: string;
   categoryId: string | null;
   isGeneral: boolean;
@@ -34,7 +32,9 @@ export async function createEvent({
   pointsGroup: string;
 }): Promise<ActionResult<any>> {
   try {
-    await requireAdminSession(madrassaId);
+    const session = await verifySession();
+    if (!session) return { success: false, message: "Unauthorized" };
+    const madrassaId = session.madrassa_id;
 
     const supabase = await createClient();
 
@@ -70,12 +70,13 @@ export async function createEvent({
 // ── Generate Subgroups & Code Letters ─────────────────────────────────────
 
 export async function generateSubgroupsAndCodeLetters(
-  madrassaId: string,
   eventId: string,
   prefixLetter: string
 ): Promise<ActionResult<any>> {
   try {
-    await requireAdminSession(madrassaId);
+    const session = await verifySession();
+    if (!session) return { success: false, message: "Unauthorized" };
+    const madrassaId = session.madrassa_id;
 
     const supabase = await createClient();
 
@@ -197,11 +198,12 @@ export async function generateSubgroupsAndCodeLetters(
 // ── Create Stage ──────────────────────────────────────────────────────────
 
 export async function createStage(
-  madrassaId: string,
   stageName: string
 ): Promise<ActionResult<any>> {
   try {
-    await requireAdminSession(madrassaId);
+    const session = await verifySession();
+    if (!session) return { success: false, message: "Unauthorized" };
+    const madrassaId = session.madrassa_id;
 
     const supabase = await createClient();
 
@@ -227,13 +229,14 @@ export async function createStage(
 // ── Schedule Event ────────────────────────────────────────────────────────
 
 export async function scheduleEvent(
-  madrassaId: string,
   eventId: string,
   stageId: string,
   startTime: string
 ): Promise<ActionResult<any>> {
   try {
-    await requireAdminSession(madrassaId);
+    const session = await verifySession();
+    if (!session) return { success: false, message: "Unauthorized" };
+    const madrassaId = session.madrassa_id;
 
     const supabase = await createClient();
 

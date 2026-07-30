@@ -29,9 +29,6 @@ interface ImportedStudent {
   register_number_3digit?: number;
 }
 
-// ── Hardcoded madrassa ID – replace with auth context / tenant resolution ──
-const MADRASSA_ID = "YOUR_MADRASSA_ID";
-
 // ── Sub-components ─────────────────────────────────────────────────────────
 
 function TeamsTab() {
@@ -46,7 +43,7 @@ function TeamsTab() {
     setError("");
     startTransition(async () => {
       try {
-        const team = await createTeam(MADRASSA_ID, name.trim(), color);
+        const team = await createTeam(name.trim(), color);
         
         if (team?.success && team?.data) {
           setTeams((prev) => [...prev, team.data as Team]);
@@ -135,7 +132,7 @@ function CategoriesTab() {
     setError("");
     startTransition(async () => {
       try {
-        const cat = await createCategory(MADRASSA_ID, name.trim(), startNum, isGeneral);
+        const cat = await createCategory(name.trim(), startNum, isGeneral);
         
         if (cat?.success && cat?.data) {
           setCategories((prev) => [...prev, cat.data as Category]);
@@ -143,7 +140,6 @@ function CategoriesTab() {
           setStartNum(1);
           setIsGeneral(false);
         } else {
-          // Note: If your error state variable is named differently (e.g., setCatError), use that here!
           setError(cat?.message || "Failed to create category.");
         }
       } catch (e: unknown) {
@@ -266,7 +262,7 @@ function StudentsTab() {
     setImportError("");
     startTransition(async () => {
       try {
-        const result = await bulkImportStudents(MADRASSA_ID, students);
+        const result = await bulkImportStudents(students);
         // Merge register numbers from DB result
         if (result?.success) {
           setStudents(
@@ -277,7 +273,6 @@ function StudentsTab() {
           );
           setImported(true);
         } else {
-          // Note: Use whatever your error state variable is named here, e.g., setErr or setError
           setImportError(result?.message || "Failed to import students.");
         }
       } catch (e: unknown) {

@@ -37,7 +37,7 @@ export default function JudgeDashboardPage() {
       }
       setJudgeId(session.judgeId);
 
-      const result = await getAssignedEvents(session.judgeId);
+      const result = await getAssignedEvents();
       if (result.success && result.data) {
         setEvents(result.data);
       } else {
@@ -69,7 +69,8 @@ export default function JudgeDashboardPage() {
     setSelectedEvent(event);
     setView('loading');
 
-    const result = await getEventParticipantsByCodeLetter(event.id, judgeId || "");
+    // FIXED: Removed the invalid `judgeId` argument
+    const result = await getEventParticipantsByCodeLetter(event.id);
     if (result.success && result.data) {
       setParticipants(result.data);
       setCurrentIndex(0);
@@ -100,32 +101,41 @@ export default function JudgeDashboardPage() {
 
   async function saveCurrentScore(): Promise<boolean> {
     if (!currentParticipant || !judgeId || !selectedEvent) return false;
-    setIsSaving(true);
-    setError(null);
-
-    if (!event || !currentParticipant) {
+    
+    // FIXED: Use selectedEvent instead of the undefined `event` variable
+    if (!selectedEvent || !currentParticipant) {
       console.error("Missing event or participant data");
       return false;
     }
 
-    const result = await submitJudgeScore(
-      (event as any).id,
-      currentParticipant.participantType,
-      currentParticipant.participantId,
-      scores,
-      totalScore
-    );
+    setIsSaving(true);
+    setError(null);
 
-    setIsSaving(false);
+    try {
+      const result = await submitJudgeScore(
+        selectedEvent.id, // FIXED: Removed `(event as any).id`
+        currentParticipant.participantType,
+        currentParticipant.participantId,
+        scores,
+        totalScore
+      );
 
-    if (!result.success) {
-      setError(result.message ?? 'Failed to save score.');
+      if (!result.success) {
+        setError(result.message ?? 'Failed to save score.');
+        setIsSaving(false);
+        return false;
+      }
+
+      setSavedFlash(true);
+      setTimeout(() => setSavedFlash(false), 1200);
+      return true;
+    } catch (e) {
+      console.error(e);
+      setError('An unexpected error occurred.');
       return false;
+    } finally {
+      setIsSaving(false);
     }
-
-    setSavedFlash(true);
-    setTimeout(() => setSavedFlash(false), 1200);
-    return true;
   }
 
   async function handleNext() {
@@ -291,11 +301,16 @@ export default function JudgeDashboardPage() {
             <button
               key={p.participantId}
               onClick={async () => {
+                // FIXED: Prevent double-taps while saving
+                if (isSaving) return; 
+                
                 const saved = await saveCurrentScore();
                 if (!saved) return;
                 setCurrentIndex(idx);
                 loadScoresForIndex(idx);
               }}
+              // FIXED: Visually fade out the button to show it is disabled
+              style={{ opacity: isSaving ? 0.5 : 1 }}
               className={`shrink-0 h-9 w-9 rounded-full text-xs font-bold flex items-center justify-center transition border ${
                 idx === currentIndex
                   ? 'bg-emerald-500 text-emerald-950 border-emerald-400'

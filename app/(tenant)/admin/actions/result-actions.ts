@@ -193,18 +193,21 @@ export async function publishEventResults(
 ): Promise<ActionResult<{ publishedCount: number }>> {
   try {
     await requireAdminSession(madrassaId);
-
     const supabase = await createClient();
 
-    const { data: rawEventRow, error: eventError } = await supabase
+    // 1. THE LOCK: Atomically flip status to "publishing" and fetch event rules at the same time.
+    // By restricting `.in('status', ['live', 'completed'])`, we prevent a double-publish race condition.
+    const { data: rawEventRow, error: lockError } = await supabase
       .from('events')
-      .select('id, participant_mode, point_rules')
+      .update({ status: 'publishing' } as any)
       .eq('id', eventId)
       .eq('madrassa_id', madrassaId)
+      .in('status', ['live', 'completed']) 
+      .select('id, participant_mode, point_rules')
       .single();
 
-    if (eventError || !rawEventRow) {
-      return { success: false, message: 'Event not found.' };
+    if (lockError || !rawEventRow) {
+      return { success: false, message: 'Event is not ready to publish or is already being published.' };
     }
 
     const eventRow = rawEventRow as any;
@@ -226,11 +229,15 @@ export async function publishEventResults(
           ],
         };
 
+    // 2. Read the scoreboard data safely now that the event is locked
     const scoreboardResult = await getEventScoreboard(madrassaId, eventId);
     if (!scoreboardResult.success || !scoreboardResult.data) {
+      // Rollback: if scoreboard fails, revert status back to completed
+      await supabase.from('events').update({ status: 'completed' } as any).eq('id', eventId);
       return { success: false, message: scoreboardResult.message ?? 'Failed to compute scoreboard.' };
     }
 
+    // 3. Compute final ranks and map to upsert format
     const finalized = scoreboardResult.data.map((entry) => ({
       ...entry,
       finalRank: entry.overrideRank ?? entry.autoRank,
@@ -258,21 +265,39 @@ export async function publishEventResults(
       };
     });
 
-    const { error: upsertError } = await supabase.from('results').upsert(resultsToUpsert as any, {
-      onConflict: 'madrassa_id,event_id,participant_id'
-    });
+    // 4. Safely Upsert the Results
+    if (resultsToUpsert.length > 0) {
+      const { error: upsertError } = await supabase.from('results').upsert(resultsToUpsert as any, {
+        onConflict: 'madrassa_id,event_id,participant_id'
+      });
 
-    if (upsertError) throw upsertError;
+      if (upsertError) {
+        // Rollback on failure
+        await supabase.from('events').update({ status: 'completed' } as any).eq('id', eventId);
+        throw upsertError;
+      }
+    }
 
+    // 5. Finally, mark it fully published!
     await (supabase.from('events') as any)
       .update({ status: 'published', updated_at: new Date().toISOString() })
       .eq('id', eventId)
       .eq('madrassa_id', madrassaId);
 
+    // Revalidate caches (Audit recommendation: clear public results cache too)
     revalidatePath('/admin/results');
+    revalidatePath('/results'); 
+
     return { success: true, data: { publishedCount: resultsToUpsert.length } };
   } catch (error) {
     console.error('publishEventResults error:', error);
+    
+    // Best-effort rollback just in case an unexpected crash happens
+    try {
+      const supabase = await createClient();
+      await supabase.from('events').update({ status: 'completed' } as any).eq('id', eventId);
+    } catch (_) {}
+    
     return { success: false, message: 'Failed to publish results.' };
   }
 }

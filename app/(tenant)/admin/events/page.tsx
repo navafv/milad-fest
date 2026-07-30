@@ -9,9 +9,6 @@ import {
   scheduleEvent,
 } from "../actions/event-actions";
 
-// ── Replace with tenant context ────────────────────────────────────────────
-const MADRASSA_ID = "YOUR_MADRASSA_ID";
-
 // ── Types ──────────────────────────────────────────────────────────────────
 
 interface Event {
@@ -173,7 +170,6 @@ function EventsSquadsTab() {
     startCreate(async () => {
       try {
         const ev = await createEvent({
-          madrassaId: MADRASSA_ID,
           name: name.trim(),
           categoryId: categoryId || null,
           isGeneral,
@@ -211,7 +207,6 @@ function EventsSquadsTab() {
     startGen(async () => {
       try {
         const result = await generateSubgroupsAndCodeLetters(
-          MADRASSA_ID,
           modalEvent.id,
           prefix.toUpperCase()
         );
@@ -417,7 +412,7 @@ function StageScheduleTab() {
     setStageErr("");
     startStage(async () => {
       try {
-        const s = await createStage(MADRASSA_ID, stageName.trim());
+        const s = await createStage(stageName.trim());
         if (s?.success && s?.data) {
           setStages((p) => [...p, s.data as Stage]);
           setStageName("");
@@ -438,7 +433,7 @@ function StageScheduleTab() {
     setSchedErr("");
     startSched(async () => {
       try {
-        const entry = await scheduleEvent(MADRASSA_ID, eid, selStageId, startTime);
+        const entry = await scheduleEvent(eid, selStageId, startTime);
         
         if (entry?.success && entry?.data) {
           const selectedStageName = stages.find(s => s.id === selStageId)?.name ?? selStageId;
