@@ -3,30 +3,7 @@
 import { useEffect, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { loginJudge } from '../actions/judge-actions';
-
-/**
- * Inline server action, colocated in this client component file.
- *
- * This app resolves the active tenant via the `x-madrassa-subdomain`
- * request header (set by middleware from either `?tenant=xyz` or the
- * `active_tenant` cookie) — never from a route param — so there is no
- * `useParams().subdomain` to read here. `headers()`/`cookies()` are
- * server-only APIs, so this small lookup is expressed as a Server
- * Action ("use server") that the client component below can call
- * directly, rather than trying to read them client-side.
- */
-async function getActiveTenantSubdomain(): Promise<string> {
-  'use server';
-
-  const { headers, cookies } = await import('next/headers');
-
-  const headerStore = await headers();
-  const fromHeader = headerStore.get('x-madrassa-subdomain');
-  if (fromHeader) return fromHeader;
-
-  const cookieStore = await cookies();
-  return cookieStore.get('active_tenant')?.value ?? '';
-}
+import { getActiveTenantSubdomain } from '../actions/tenant-actions';
 
 export default function JudgeLoginPage() {
   const router = useRouter();
