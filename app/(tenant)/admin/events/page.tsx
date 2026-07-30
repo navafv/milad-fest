@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   createEvent,
@@ -49,7 +49,7 @@ function Input({
       <label className="text-xs font-medium text-zinc-400">{label}</label>
       <input
         {...props}
-        className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-40"
+        className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-40"
       />
     </div>
   );
@@ -82,7 +82,8 @@ function Btn({
 }: { variant?: "primary" | "emerald" | "ghost" } & React.ButtonHTMLAttributes<HTMLButtonElement> & {
     children: React.ReactNode;
   }) {
-  const base = "rounded-lg px-4 py-2 text-sm font-medium transition-colors disabled:opacity-40";
+  const base =
+    "rounded-lg px-4 py-2 min-h-[44px] text-sm font-medium transition-colors disabled:opacity-40";
   const styles = {
     primary: "bg-indigo-600 text-white hover:bg-indigo-500",
     emerald: "bg-emerald-600 text-white hover:bg-emerald-500",
@@ -96,7 +97,11 @@ function Btn({
 }
 
 function ErrMsg({ msg }: { msg: string }) {
-  return msg ? <p className="text-sm text-red-400">{msg}</p> : null;
+  return msg ? (
+    <p role="alert" aria-live="assertive" className="text-sm text-red-400">
+      {msg}
+    </p>
+  ) : null;
 }
 
 function Badge({ text, green }: { text: string; green?: boolean }) {
@@ -108,6 +113,26 @@ function Badge({ text, green }: { text: string; green?: boolean }) {
     >
       {text}
     </span>
+  );
+}
+
+function EmptyState({
+  icon,
+  title,
+  description,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center text-center py-12 px-6 rounded-xl border border-dashed border-zinc-800 bg-zinc-900/40">
+      <div className="h-11 w-11 rounded-full bg-zinc-800 flex items-center justify-center mb-3 text-zinc-500">
+        {icon}
+      </div>
+      <p className="text-sm font-medium text-zinc-300">{title}</p>
+      <p className="text-xs text-zinc-500 mt-1 max-w-xs">{description}</p>
+    </div>
   );
 }
 
@@ -124,13 +149,37 @@ function Modal({
   title: string;
   children: React.ReactNode;
 }) {
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-      <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-xl space-y-4">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modal-title"
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-xl space-y-4"
+      >
         <div className="flex items-center justify-between">
-          <h3 className="text-base font-semibold text-white">{title}</h3>
-          <button onClick={onClose} className="text-zinc-500 hover:text-zinc-300 text-lg leading-none">
+          <h3 id="modal-title" className="text-base font-semibold text-white">
+            {title}
+          </h3>
+          <button
+            onClick={onClose}
+            aria-label="Close dialog"
+            className="text-zinc-500 hover:text-zinc-300 text-lg leading-none h-9 w-9 flex items-center justify-center"
+          >
             ✕
           </button>
         </div>
@@ -144,6 +193,7 @@ function Modal({
 
 function EventsSquadsTab() {
   const [events, setEvents] = useState<Event[]>([]);
+  const [toast, setToast] = useState<string | null>(null);
 
   // Create event form state
   const [name, setName] = useState("");
@@ -164,6 +214,12 @@ function EventsSquadsTab() {
   const [genErr, setGenErr] = useState("");
   const [isPendingGen, startGen] = useTransition();
 
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3500);
+    return () => clearTimeout(t);
+  }, [toast]);
+
   function handleCreateEvent() {
     if (!name.trim()) { setCreateErr("Name required"); return; }
     setCreateErr("");
@@ -183,9 +239,9 @@ function EventsSquadsTab() {
           setEvents((p) => [...p, ev.data as Event]);
           setName("");
           setCategoryId("");
+          setToast(`"${(ev.data as Event).name}" created.`);
         } else {
-          console.error(ev.message);
-          alert(ev.message || "Failed to create event");
+          setCreateErr(ev.message || "Failed to create event");
         }
       } catch (e: unknown) {
         setCreateErr(e instanceof Error ? e.message : "Error");
@@ -210,9 +266,8 @@ function EventsSquadsTab() {
           modalEvent.id,
           prefix.toUpperCase()
         );
-        
+
         if (result?.success) {
-          // Check if data exists and is an array before getting length
           const count = Array.isArray(result.data) ? result.data.length : 0;
           setGenResult(`Generated ${count} subgroup(s).`);
         } else {
@@ -239,7 +294,7 @@ function EventsSquadsTab() {
             <label className="text-xs font-medium text-zinc-400">Category</label>
             <div className="flex gap-3 items-center">
               <input
-                className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 flex-1 disabled:opacity-40"
+                className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 flex-1 disabled:opacity-40"
                 placeholder="Category UUID"
                 value={categoryId}
                 onChange={(e) => setCategoryId(e.target.value)}
@@ -269,10 +324,11 @@ function EventsSquadsTab() {
 
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-zinc-400">Event Type</label>
-            <div className="flex rounded-lg overflow-hidden border border-zinc-700">
+            <div className="flex rounded-lg overflow-hidden border border-zinc-700" role="group" aria-label="Event type">
               <button
                 onClick={() => setIsGroup(false)}
-                className={`flex-1 py-2 text-sm font-medium transition-colors ${
+                aria-pressed={!isGroup}
+                className={`flex-1 py-2 min-h-[44px] text-sm font-medium transition-colors ${
                   !isGroup ? "bg-indigo-600 text-white" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
                 }`}
               >
@@ -280,7 +336,8 @@ function EventsSquadsTab() {
               </button>
               <button
                 onClick={() => setIsGroup(true)}
-                className={`flex-1 py-2 text-sm font-medium transition-colors ${
+                aria-pressed={isGroup}
+                className={`flex-1 py-2 min-h-[44px] text-sm font-medium transition-colors ${
                   isGroup ? "bg-indigo-600 text-white" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
                 }`}
               >
@@ -322,7 +379,7 @@ function EventsSquadsTab() {
       </div>
 
       {/* Events table */}
-      {events.length > 0 && (
+      {events.length > 0 ? (
         <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
           <div className="px-4 py-3 border-b border-zinc-800">
             <span className="text-sm font-medium text-zinc-300">{events.length} Events</span>
@@ -361,6 +418,16 @@ function EventsSquadsTab() {
             </table>
           </div>
         </div>
+      ) : (
+        <EmptyState
+          icon={
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z" />
+            </svg>
+          }
+          title="No events yet"
+          description="Create your first event above to start generating squads and code letters."
+        />
       )}
 
       {/* Generate modal */}
@@ -383,6 +450,17 @@ function EventsSquadsTab() {
           <Btn variant="ghost" onClick={() => setModalEvent(null)}>Cancel</Btn>
         </div>
       </Modal>
+
+      {toast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-6 right-6 z-50 flex items-center gap-3 rounded-xl bg-emerald-600 px-5 py-3.5 text-sm font-medium text-white shadow-xl ring-1 ring-emerald-700"
+        >
+          <span>✓</span>
+          <span>{toast}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -418,8 +496,7 @@ function StageScheduleTab() {
           setStageName("");
           if (!selStageId) setSelStageId((s.data as Stage).id);
         } else {
-          console.error(s?.message);
-          alert(s?.message || "Failed to create stage");
+          setStageErr(s?.message || "Failed to create stage");
         }
       } catch (e: unknown) {
         setStageErr(e instanceof Error ? e.message : "Error");
@@ -434,7 +511,7 @@ function StageScheduleTab() {
     startSched(async () => {
       try {
         const entry = await scheduleEvent(eid, selStageId, startTime);
-        
+
         if (entry?.success && entry?.data) {
           const selectedStageName = stages.find(s => s.id === selStageId)?.name ?? selStageId;
 
@@ -447,8 +524,7 @@ function StageScheduleTab() {
             },
           ]);
         } else {
-          console.error(entry?.message);
-          alert(entry?.message || "Failed to schedule event.");
+          setSchedErr(entry?.message || "Failed to schedule event.");
         }
         setSelEventId("");
         setEventIdInput("");
@@ -478,7 +554,7 @@ function StageScheduleTab() {
         <h2 className="text-lg font-semibold text-white">Add Stage</h2>
         <div className="flex gap-3 flex-col sm:flex-row">
           <input
-            className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             placeholder="e.g. Main Stage"
             value={stageName}
             onChange={(e) => setStageName(e.target.value)}
@@ -542,7 +618,7 @@ function StageScheduleTab() {
       </div>
 
       {/* Schedule board */}
-      {schedules.length > 0 && (
+      {schedules.length > 0 ? (
         <div className="space-y-4">
           <h2 className="text-base font-semibold text-white">Schedule Board</h2>
           {Object.entries(byStage).map(([stageName, entries]) => (
@@ -581,6 +657,16 @@ function StageScheduleTab() {
             </div>
           ))}
         </div>
+      ) : (
+        <EmptyState
+          icon={
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
+            </svg>
+          }
+          title="No events scheduled yet"
+          description="Add a stage above, then assign an event to it to build out the schedule board."
+        />
       )}
     </div>
   );

@@ -36,7 +36,10 @@ export default function LeaderboardClient({ teams }: LeaderboardClientProps) {
         </div>
 
         <div className="relative z-10 flex flex-col items-center text-center">
-          <div className="h-24 w-24 rounded-full bg-yellow-500/15 border-2 border-yellow-400/40 flex items-center justify-center mb-6">
+          <div
+            className="h-24 w-24 rounded-full bg-yellow-500/15 border-2 border-yellow-400/40 flex items-center justify-center mb-6"
+            style={championTeam.colorCode ? { borderColor: championTeam.colorCode } : undefined}
+          >
             <svg
               xmlns="http://www.w3.org/2000/svg"
               className="h-12 w-12 text-yellow-400"
@@ -82,7 +85,8 @@ export default function LeaderboardClient({ teams }: LeaderboardClientProps) {
         {teams.map((team) => (
           <div
             key={team.teamId}
-            className={`rounded-2xl border px-5 py-4 ${
+            style={team.colorCode ? { borderLeftColor: team.colorCode } : undefined}
+            className={`rounded-2xl border border-l-4 px-5 py-4 ${
               team.rank === 1
                 ? 'bg-yellow-500/10 border-yellow-400/30'
                 : team.rank === 2
@@ -115,7 +119,9 @@ export default function LeaderboardClient({ teams }: LeaderboardClientProps) {
             <div className="h-2 w-full rounded-full bg-white/5 overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all ${
-                  team.rank === 1
+                  team.colorCode
+                    ? ''
+                    : team.rank === 1
                     ? 'bg-yellow-400'
                     : team.rank === 2
                     ? 'bg-slate-300'
@@ -123,7 +129,10 @@ export default function LeaderboardClient({ teams }: LeaderboardClientProps) {
                     ? 'bg-orange-400'
                     : 'bg-emerald-500'
                 }`}
-                style={{ width: `${Math.max((team.totalPoints / maxPoints) * 100, 3)}%` }}
+                style={{
+                  width: `${Math.max((team.totalPoints / maxPoints) * 100, 3)}%`,
+                  ...(team.colorCode ? { backgroundColor: team.colorCode } : {}),
+                }}
               />
             </div>
           </div>

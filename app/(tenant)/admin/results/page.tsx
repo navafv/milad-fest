@@ -11,6 +11,27 @@ import {
   type EventOption,
   type RankOverrideInput,
 } from '../actions/result-actions';
+import { Toast, type ToastState } from '@/components/ui/toast';
+
+function EmptyState({
+  icon,
+  title,
+  description,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center text-center py-12 px-6">
+      <div className="h-11 w-11 rounded-full bg-white/5 flex items-center justify-center mb-3 text-slate-500">
+        {icon}
+      </div>
+      <p className="text-sm font-medium text-slate-300">{title}</p>
+      <p className="text-xs text-slate-500 mt-1 max-w-xs">{description}</p>
+    </div>
+  );
+}
 
 export default function AdminResultsPage() {
   const params = useParams();
@@ -24,8 +45,7 @@ export default function AdminResultsPage() {
   const [loadingScoreboard, setLoadingScoreboard] = useState(false);
   const [savingOverrides, setSavingOverrides] = useState(false);
   const [publishing, setPublishing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
 
   useEffect(() => {
@@ -37,7 +57,7 @@ export default function AdminResultsPage() {
           setSelectedEventId(result.data[0].id);
         }
       } else {
-        setError(result.message ?? 'Failed to load events.');
+        setToast({ variant: 'error', message: result.message ?? 'Failed to load events.' });
       }
       setLoading(false);
     })();
@@ -50,8 +70,8 @@ export default function AdminResultsPage() {
 
   async function loadScoreboard(eventId: string) {
     setLoadingScoreboard(true);
-    setError(null);
-    setMessage(null);
+    setScoreboard([]); // prevents a stale-event flash while the new one loads
+    setToast(null);
 
     const result = await getEventScoreboard(madrassaId, eventId);
     if (result.success && result.data) {
@@ -63,7 +83,7 @@ export default function AdminResultsPage() {
       }
       setOverrides(initialOverrides);
     } else {
-      setError(result.message ?? 'Failed to load scoreboard.');
+      setToast({ variant: 'error', message: result.message ?? 'Failed to load scoreboard.' });
       setScoreboard([]);
     }
     setLoadingScoreboard(false);
@@ -85,8 +105,7 @@ export default function AdminResultsPage() {
 
   async function handleSaveOverrides() {
     setSavingOverrides(true);
-    setError(null);
-    setMessage(null);
+    setToast(null);
 
     const rankOverrides: RankOverrideInput[] = [];
     for (const entry of scoreboard) {
@@ -103,7 +122,7 @@ export default function AdminResultsPage() {
 
     if (rankOverrides.length === 0) {
       setSavingOverrides(false);
-      setError('No rank overrides to save. Enter at least one manual rank.');
+      setToast({ variant: 'error', message: 'No rank overrides to save. Enter at least one manual rank.' });
       return;
     }
 
@@ -111,29 +130,29 @@ export default function AdminResultsPage() {
     setSavingOverrides(false);
 
     if (result.success) {
-      setMessage('Rank overrides saved successfully.');
+      setToast({ variant: 'success', message: 'Rank overrides saved successfully.' });
       loadScoreboard(selectedEventId);
     } else {
-      setError(result.message ?? 'Failed to save rank overrides.');
+      setToast({ variant: 'error', message: result.message ?? 'Failed to save rank overrides.' });
     }
   }
 
   async function handlePublish() {
     setPublishing(true);
-    setError(null);
-    setMessage(null);
+    setToast(null);
     setShowPublishConfirm(false);
 
     const result = await publishEventResults(madrassaId, selectedEventId);
     setPublishing(false);
 
     if (result.success) {
-      setMessage(
-        `Results published successfully. ${result.data?.publishedCount ?? 0} participant records updated.`
-      );
+      setToast({
+        variant: 'success',
+        message: `Results published successfully. ${result.data?.publishedCount ?? 0} participant records updated.`,
+      });
       loadScoreboard(selectedEventId);
     } else {
-      setError(result.message ?? 'Failed to publish results.');
+      setToast({ variant: 'error', message: result.message ?? 'Failed to publish results.' });
     }
   }
 
@@ -184,18 +203,6 @@ export default function AdminResultsPage() {
           </select>
         </div>
 
-        {error && (
-          <p className="text-red-300 text-sm mb-4 bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-3">
-            {error}
-          </p>
-        )}
-
-        {message && (
-          <p className="text-emerald-300 text-sm mb-4 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-4 py-3">
-            {message}
-          </p>
-        )}
-
         {hasTies && (
           <div className="mb-4 flex items-start gap-3 bg-amber-500/10 border border-amber-500/25 rounded-xl px-4 py-3">
             <svg
@@ -223,33 +230,47 @@ export default function AdminResultsPage() {
         )}
 
         <div className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/10 bg-white/5">
-                  <th className="text-left px-4 py-3 font-medium text-slate-400">Code Letter</th>
-                  <th className="text-left px-4 py-3 font-medium text-slate-400">Type</th>
-                  <th className="text-left px-4 py-3 font-medium text-slate-400">Judges</th>
-                  <th className="text-left px-4 py-3 font-medium text-slate-400">Avg Score</th>
-                  <th className="text-left px-4 py-3 font-medium text-slate-400">Auto Rank</th>
-                  <th className="text-left px-4 py-3 font-medium text-slate-400">Manual Override</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loadingScoreboard ? (
-                  <tr>
-                    <td colSpan={6} className="text-center py-10 text-slate-500">
-                      Loading scoreboard...
-                    </td>
+          {loadingScoreboard ? (
+            <div className="flex flex-col items-center justify-center text-center py-12 px-6">
+              <div className="h-8 w-8 border-4 border-emerald-500/30 border-t-emerald-400 rounded-full animate-spin mb-3" />
+              <p className="text-slate-500 text-sm">Loading scoreboard...</p>
+            </div>
+          ) : scoreboard.length === 0 ? (
+            <EmptyState
+              icon={
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-5 w-5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.129v-1.007m-6 0h6m-6 0H5.625c-.621 0-1.125-.504-1.125-1.125V4.875c0-.621.504-1.125 1.125-1.125h12.75c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125H9z"
+                  />
+                </svg>
+              }
+              title="No scores yet"
+              description="Once judges submit scores for this event, they'll show up here for audit and rank overrides."
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-white/10 bg-white/5">
+                    <th className="text-left px-4 py-3 font-medium text-slate-400">Code Letter</th>
+                    <th className="text-left px-4 py-3 font-medium text-slate-400">Type</th>
+                    <th className="text-left px-4 py-3 font-medium text-slate-400">Judges</th>
+                    <th className="text-left px-4 py-3 font-medium text-slate-400">Avg Score</th>
+                    <th className="text-left px-4 py-3 font-medium text-slate-400">Auto Rank</th>
+                    <th className="text-left px-4 py-3 font-medium text-slate-400">Manual Override</th>
                   </tr>
-                ) : scoreboard.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="text-center py-10 text-slate-500">
-                      No scores found for this event yet.
-                    </td>
-                  </tr>
-                ) : (
-                  scoreboard.map((entry) => {
+                </thead>
+                <tbody>
+                  {scoreboard.map((entry) => {
                     const key = `${entry.participantType}:${entry.participantId}`;
                     return (
                       <tr
@@ -301,11 +322,11 @@ export default function AdminResultsPage() {
                         </td>
                       </tr>
                     );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-col sm:flex-row gap-3 mt-6">
@@ -356,6 +377,8 @@ export default function AdminResultsPage() {
           </div>
         </div>
       )}
+
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }

@@ -29,6 +29,36 @@ interface ImportedStudent {
   register_number_3digit?: number;
 }
 
+// ── Shared UI atoms ────────────────────────────────────────────────────────
+
+function ErrMsg({ msg }: { msg: string }) {
+  return msg ? (
+    <p role="alert" aria-live="assertive" className="text-sm text-red-400">
+      {msg}
+    </p>
+  ) : null;
+}
+
+function EmptyState({
+  icon,
+  title,
+  description,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center text-center py-12 px-6 rounded-xl border border-dashed border-zinc-800 bg-zinc-900/40">
+      <div className="h-11 w-11 rounded-full bg-zinc-800 flex items-center justify-center mb-3 text-zinc-500">
+        {icon}
+      </div>
+      <p className="text-sm font-medium text-zinc-300">{title}</p>
+      <p className="text-xs text-zinc-500 mt-1 max-w-xs">{description}</p>
+    </div>
+  );
+}
+
 // ── Sub-components ─────────────────────────────────────────────────────────
 
 function TeamsTab() {
@@ -44,7 +74,7 @@ function TeamsTab() {
     startTransition(async () => {
       try {
         const team = await createTeam(name.trim(), color);
-        
+
         if (team?.success && team?.data) {
           setTeams((prev) => [...prev, team.data as Team]);
           setName("");
@@ -63,32 +93,33 @@ function TeamsTab() {
         <h2 className="text-lg font-semibold text-white">Add Team</h2>
         <div className="flex flex-col sm:flex-row gap-3">
           <input
-            className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             placeholder="Team name"
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
           <div className="flex items-center gap-2">
-            <label className="text-sm text-zinc-400">Color</label>
+            <label htmlFor="team-color" className="text-sm text-zinc-400">Color</label>
             <input
+              id="team-color"
               type="color"
               value={color}
               onChange={(e) => setColor(e.target.value)}
-              className="h-9 w-12 cursor-pointer rounded border border-zinc-700 bg-zinc-800 p-1"
+              className="h-11 w-12 cursor-pointer rounded border border-zinc-700 bg-zinc-800 p-1"
             />
           </div>
           <button
             onClick={handleAdd}
             disabled={isPending}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
+            className="rounded-lg bg-indigo-600 px-4 py-2 min-h-[44px] text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
           >
             {isPending ? "Adding…" : "Add Team"}
           </button>
         </div>
-        {error && <p className="text-sm text-red-400">{error}</p>}
+        <ErrMsg msg={error} />
       </div>
 
-      {teams.length > 0 && (
+      {teams.length > 0 ? (
         <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
           <table className="w-full text-sm">
             <thead className="border-b border-zinc-800 bg-zinc-800/50">
@@ -105,6 +136,8 @@ function TeamsTab() {
                     <span
                       className="inline-block h-5 w-5 rounded-full border border-zinc-600"
                       style={{ backgroundColor: t.color_code }}
+                      role="img"
+                      aria-label={`Team color: ${t.color_code}`}
                     />
                   </td>
                   <td className="px-4 py-3 text-white font-medium">{t.name}</td>
@@ -114,6 +147,16 @@ function TeamsTab() {
             </tbody>
           </table>
         </div>
+      ) : (
+        <EmptyState
+          icon={
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+            </svg>
+          }
+          title="No teams yet"
+          description="Add your first team above to start assigning students and tracking points."
+        />
       )}
     </div>
   );
@@ -133,7 +176,7 @@ function CategoriesTab() {
     startTransition(async () => {
       try {
         const cat = await createCategory(name.trim(), startNum, isGeneral);
-        
+
         if (cat?.success && cat?.data) {
           setCategories((prev) => [...prev, cat.data as Category]);
           setName("");
@@ -154,7 +197,7 @@ function CategoriesTab() {
         <h2 className="text-lg font-semibold text-white">Add Category</h2>
         <div className="flex flex-col sm:flex-row gap-3">
           <input
-            className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             placeholder="Category name"
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -162,6 +205,7 @@ function CategoriesTab() {
           <input
             type="number"
             min={1}
+            aria-label="Starting number"
             className="w-32 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
             placeholder="Start #"
             value={startNum}
@@ -180,14 +224,14 @@ function CategoriesTab() {
         <button
           onClick={handleAdd}
           disabled={isPending}
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
+          className="rounded-lg bg-indigo-600 px-4 py-2 min-h-[44px] text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
         >
           {isPending ? "Adding…" : "Add Category"}
         </button>
-        {error && <p className="text-sm text-red-400">{error}</p>}
+        <ErrMsg msg={error} />
       </div>
 
-      {categories.length > 0 && (
+      {categories.length > 0 ? (
         <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
           <table className="w-full text-sm">
             <thead className="border-b border-zinc-800 bg-zinc-800/50">
@@ -214,6 +258,17 @@ function CategoriesTab() {
             </tbody>
           </table>
         </div>
+      ) : (
+        <EmptyState
+          icon={
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 005.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 009.568 3z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 6h.008v.008H6V6z" />
+            </svg>
+          }
+          title="No categories yet"
+          description="Add a category above (e.g. Junior, Senior) to organize events and register numbers."
+        />
       )}
     </div>
   );
@@ -226,6 +281,10 @@ function StudentsTab() {
   const [isPending, startTransition] = useTransition();
   const [imported, setImported] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  function isRowInvalid(s: ImportedStudent) {
+    return !s.name || !s.category_id || !s.team_id;
+  }
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -247,10 +306,17 @@ function StudentsTab() {
           team_id: row["Team ID"] ?? row["team_id"] ?? "",
         }));
 
-        if (mapped.some((s) => !s.name)) {
-          setParseError("Some rows missing Name. Check CSV headers: Name, Gender, Class, Category ID, Team ID");
-          return;
+        const invalidRowNumbers = mapped
+          .map((s, i) => ({ ...s, _row: i + 2 })) // +2 = header row + 1-indexed
+          .filter(isRowInvalid)
+          .map((s) => s._row);
+
+        if (invalidRowNumbers.length > 0) {
+          setParseError(
+            `${invalidRowNumbers.length} row(s) have missing data (rows: ${invalidRowNumbers.join(", ")}). Check the Name, Category ID, and Team ID columns — flagged rows are highlighted below.`
+          );
         }
+
         setStudents(mapped);
       },
       error: (err) => setParseError(err.message),
@@ -294,22 +360,25 @@ function StudentsTab() {
             type="file"
             accept=".csv"
             onChange={handleFile}
-            className="block text-sm text-zinc-400 file:mr-3 file:cursor-pointer file:rounded-lg file:border-0 file:bg-indigo-600 file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-indigo-500"
+            aria-label="Upload student CSV file"
+            className="block text-sm text-zinc-400 file:mr-3 file:cursor-pointer file:rounded-lg file:border-0 file:bg-indigo-600 file:px-4 file:py-2.5 file:text-sm file:font-medium file:text-white hover:file:bg-indigo-500"
           />
           {students.length > 0 && !imported && (
             <button
               onClick={handleImport}
               disabled={isPending}
-              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors whitespace-nowrap"
+              className="rounded-lg bg-emerald-600 px-4 py-2 min-h-[44px] text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors whitespace-nowrap"
             >
               {isPending ? "Importing…" : `Import ${students.length} Students`}
             </button>
           )}
         </div>
-        {parseError && <p className="text-sm text-red-400">{parseError}</p>}
-        {importError && <p className="text-sm text-red-400">{importError}</p>}
+        <ErrMsg msg={parseError} />
+        <ErrMsg msg={importError} />
         {imported && (
-          <p className="text-sm text-emerald-400">✓ {students.length} students imported successfully.</p>
+          <p role="status" aria-live="polite" className="text-sm text-emerald-400">
+            ✓ {students.length} students imported successfully.
+          </p>
         )}
       </div>
 
@@ -332,17 +401,24 @@ function StudentsTab() {
               </thead>
               <tbody className="divide-y divide-zinc-800">
                 {students.map((s, i) => (
-                  <tr key={i} className="hover:bg-zinc-800/30 transition-colors">
+                  <tr
+                    key={i}
+                    className={`hover:bg-zinc-800/30 transition-colors ${isRowInvalid(s) ? "bg-rose-500/10" : ""}`}
+                  >
                     <td className="px-4 py-2 text-indigo-400 font-mono text-xs">
                       {s.register_number_3digit !== undefined
                         ? String(s.register_number_3digit).padStart(3, "0")
                         : "—"}
                     </td>
-                    <td className="px-4 py-2 text-white">{s.name}</td>
+                    <td className="px-4 py-2 text-white">{s.name || <span className="text-rose-400">Missing</span>}</td>
                     <td className="px-4 py-2 text-zinc-300">{s.gender}</td>
                     <td className="px-4 py-2 text-zinc-300">{s.class}</td>
-                    <td className="px-4 py-2 text-zinc-500 font-mono text-xs">{s.category_id || "—"}</td>
-                    <td className="px-4 py-2 text-zinc-500 font-mono text-xs">{s.team_id || "—"}</td>
+                    <td className="px-4 py-2 text-zinc-500 font-mono text-xs">
+                      {s.category_id || <span className="text-rose-400 font-sans">Missing</span>}
+                    </td>
+                    <td className="px-4 py-2 text-zinc-500 font-mono text-xs">
+                      {s.team_id || <span className="text-rose-400 font-sans">Missing</span>}
+                    </td>
                   </tr>
                 ))}
               </tbody>

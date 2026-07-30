@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { getStudentsForIdCards } from "../actions";
+import { PrintButton } from "./print-button";
 
 export default async function IdCardsPage({
   searchParams,
@@ -13,29 +14,22 @@ export default async function IdCardsPage({
   const students = await getStudentsForIdCards(madrassaId);
 
   return (
-    <div className="id-card-print-root bg-white">
+    <div className="id-card-print-root bg-slate-950 print:bg-white">
       {/* Screen-only toolbar, hidden when printing */}
-      <div className="no-print sticky top-0 z-10 flex items-center justify-between border-b border-gray-200 bg-white px-6 py-4 shadow-sm">
+      <div className="no-print sticky top-0 z-10 flex items-center justify-between border-b border-white/5 bg-slate-950/90 backdrop-blur-lg px-6 py-4">
         <div>
-          <h1 className="text-lg font-semibold text-gray-900">
+          <h1 className="text-lg font-semibold text-white">
             ID Cards — {madrassaName}
           </h1>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-slate-500">
             {students.length} student{students.length === 1 ? "" : "s"} found
           </p>
         </div>
-        <button
-          type="button"
-          onClick={undefined}
-          className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 print:hidden"
-          id="print-trigger"
-        >
-          Print
-        </button>
+        <PrintButton />
       </div>
 
       {students.length === 0 ? (
-        <p className="no-print px-6 py-12 text-center text-sm text-gray-500">
+        <p className="no-print px-6 py-12 text-center text-sm text-slate-500">
           No students found for this madrassa.
         </p>
       ) : (
@@ -81,16 +75,6 @@ export default async function IdCardsPage({
           ))}
         </div>
       )}
-
-      <script
-        dangerouslySetInnerHTML={{
-          __html: `
-            document.getElementById('print-trigger')?.addEventListener('click', function () {
-              window.print();
-            });
-          `,
-        }}
-      />
 
       <style>{`
         @media print {

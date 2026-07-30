@@ -6,40 +6,16 @@ import {
   updateFestSettings,
   changeMadrassaPassword,
   getMadrassaSettings,
-  type SettingsResult,
 } from "../actions/settings-actions";
 import { logoutTenantAdmin } from "../actions/auth-actions";
-
-// ─── Toast ────────────────────────────────────────────────────────────────────
-function Toast({ result, onDismiss }: { result: SettingsResult | null; onDismiss: () => void }) {
-  useEffect(() => {
-    if (!result) return;
-    const t = setTimeout(onDismiss, 4000);
-    return () => clearTimeout(t);
-  }, [result, onDismiss]);
-
-  if (!result) return null;
-  return (
-    <div
-      className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 rounded-xl px-5 py-3.5 text-sm font-medium shadow-xl ring-1 ${
-        result.success
-          ? "bg-emerald-600 text-white ring-emerald-700"
-          : "bg-rose-600 text-white ring-rose-700"
-      }`}
-    >
-      <span>{result.success ? "✓" : "✕"}</span>
-      <span>{result.success ? result.message : result.error}</span>
-      <button onClick={onDismiss} className="ml-2 opacity-70 hover:opacity-100">✕</button>
-    </div>
-  );
-}
+import { Toast, type ToastState } from "@/components/ui/toast";
 
 // ─── Section card ─────────────────────────────────────────────────────────────
 function Card({ title, description, children }: { title: string; description: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-100 px-6 py-5">
-        <h2 className="text-base font-bold text-slate-800">{title}</h2>
+    <div className="rounded-2xl border border-white/10 bg-white/5">
+      <div className="border-b border-white/5 px-6 py-5">
+        <h2 className="text-base font-bold text-white">{title}</h2>
         <p className="mt-0.5 text-sm text-slate-500">{description}</p>
       </div>
       <div className="p-6">{children}</div>
@@ -56,20 +32,20 @@ function Field({
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <label htmlFor={id} className="text-[11px] font-semibold uppercase tracking-widest text-slate-500">
+      <label htmlFor={id} className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">
         {label}
       </label>
       <input
         id={id} type={type} value={value} readOnly={readOnly}
         onChange={e => onChange?.(e.target.value)}
         placeholder={placeholder}
-        className={`rounded-lg border px-3.5 py-2.5 text-sm shadow-sm transition focus:outline-none focus:ring-2 ${
+        className={`rounded-lg border px-3.5 py-2.5 text-sm transition focus:outline-none focus:ring-2 ${
           readOnly
-            ? "border-slate-200 bg-slate-50 text-slate-500 cursor-default"
-            : "border-slate-200 bg-white text-slate-800 placeholder:text-slate-400 focus:border-indigo-400 focus:ring-indigo-100"
+            ? "border-white/10 bg-white/[0.02] text-slate-500 cursor-default"
+            : "border-white/10 bg-white/5 text-white placeholder:text-slate-500 focus:border-transparent focus:ring-emerald-400"
         }`}
       />
-      {hint && <p className="text-[11px] text-slate-400">{hint}</p>}
+      {hint && <p className="text-[11px] text-slate-500">{hint}</p>}
     </div>
   );
 }
@@ -79,7 +55,7 @@ function SubmitButton({ label, pending, pendingLabel }: { label: string; pending
   return (
     <button
       type="submit" disabled={pending}
-      className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 disabled:opacity-60"
+      className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-offset-2 focus:ring-offset-slate-950 disabled:opacity-60"
     >
       {pending ? (
         <>
@@ -97,7 +73,7 @@ function SubmitButton({ label, pending, pendingLabel }: { label: string; pending
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function SettingsPage() {
   const [madrassaId, setMadrassaId] = useState<string | null>(null);
-  const [toast, setToast] = useState<SettingsResult | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
 
   // Fest settings state
   const [festName, setFestName] = useState("");
@@ -135,7 +111,11 @@ export default function SettingsPage() {
     if (!madrassaId) return;
     startFestTransition(async () => {
       const result = await updateFestSettings(madrassaId, festName, logoUrl);
-      setToast(result);
+      setToast(
+        result.success
+          ? { variant: "success", message: result.message }
+          : { variant: "error", message: result.error }
+      );
     });
   }
 
@@ -143,12 +123,16 @@ export default function SettingsPage() {
     e.preventDefault();
     if (!madrassaId) return;
     if (newPassword !== confirmPassword) {
-      setToast({ success: false, error: "New passwords do not match." });
+      setToast({ variant: "error", message: "New passwords do not match." });
       return;
     }
     startPasswordTransition(async () => {
       const result = await changeMadrassaPassword(madrassaId, oldPassword, newPassword);
-      setToast(result);
+      setToast(
+        result.success
+          ? { variant: "success", message: result.message }
+          : { variant: "error", message: result.error }
+      );
       if (result.success) { setOldPassword(""); setNewPassword(""); setConfirmPassword(""); }
     });
   }
@@ -158,24 +142,24 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans">
+    <div className="min-h-screen bg-slate-950 font-sans">
       {/* Header */}
-      <header className="border-b border-slate-200 bg-white px-8 py-4">
+      <header className="sticky top-0 z-10 border-b border-white/5 bg-slate-950/90 backdrop-blur-lg px-8 py-4">
         <div className="mx-auto flex max-w-3xl items-center justify-between">
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-400">
               {subdomain ? `${subdomain}.miladnabi.vercel.app` : "Milad Fest"}
             </p>
-            <h1 className="text-xl font-bold text-slate-800">{festName || "Admin Settings"}</h1>
+            <h1 className="text-xl font-bold text-white">{festName || "Admin Settings"}</h1>
           </div>
           <div className="flex items-center gap-3">
-            <span className="hidden rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-600 ring-1 ring-indigo-200 sm:inline">
+            <span className="hidden rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-300 ring-1 ring-emerald-500/25 sm:inline">
               {registerNumber}
             </span>
             <button
               onClick={handleLogout}
               disabled={logoutPending}
-              className="rounded-lg border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:opacity-60"
+              className="rounded-lg border border-white/10 bg-white/5 px-3.5 py-1.5 text-xs font-semibold text-slate-300 transition hover:bg-white/10 disabled:opacity-60"
             >
               Sign out
             </button>
@@ -184,10 +168,10 @@ export default function SettingsPage() {
       </header>
 
       {/* Nav tabs */}
-      <div className="border-b border-slate-200 bg-white px-8">
+      <div className="border-b border-white/5 bg-slate-950 px-8">
         <div className="mx-auto max-w-3xl">
           <nav className="-mb-px flex gap-6">
-            <span className="border-b-2 border-indigo-600 py-3 text-sm font-semibold text-indigo-600">
+            <span className="border-b-2 border-emerald-400 py-3 text-sm font-semibold text-emerald-400">
               Settings
             </span>
           </nav>
@@ -227,11 +211,11 @@ export default function SettingsPage() {
             </div>
 
             {logoUrl && /^https?:\/\/.+/.test(logoUrl) && (
-              <div className="flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3">
+              <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={logoUrl} alt="Logo preview"
-                  className="h-12 w-12 rounded-lg object-contain border border-slate-200 bg-white"
+                  className="h-12 w-12 rounded-lg object-contain border border-white/10 bg-white/5"
                   onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
                 />
                 <p className="text-xs text-slate-500">Logo preview</p>
@@ -266,7 +250,7 @@ export default function SettingsPage() {
             </div>
 
             {newPassword && confirmPassword && newPassword !== confirmPassword && (
-              <p className="text-xs text-rose-500">Passwords do not match.</p>
+              <p className="text-xs text-rose-400">Passwords do not match.</p>
             )}
 
             <SubmitButton label="Change Password" pending={passwordPending} />
@@ -274,20 +258,20 @@ export default function SettingsPage() {
         </Card>
 
         {/* ── Danger zone ────────────────────────────────────── */}
-        <div className="rounded-2xl border border-rose-100 bg-rose-50/40 px-6 py-5">
-          <h3 className="text-sm font-bold text-rose-700">Sign Out</h3>
-          <p className="mt-0.5 text-xs text-rose-500">End your current admin session.</p>
+        <div className="rounded-2xl border border-rose-500/20 bg-rose-500/5 px-6 py-5">
+          <h3 className="text-sm font-bold text-rose-300">Sign Out</h3>
+          <p className="mt-0.5 text-xs text-rose-400/70">End your current admin session.</p>
           <button
             onClick={handleLogout}
             disabled={logoutPending}
-            className="mt-4 rounded-lg border border-rose-200 bg-white px-4 py-2 text-xs font-semibold text-rose-600 shadow-sm transition hover:bg-rose-50 disabled:opacity-60"
+            className="mt-4 rounded-lg border border-rose-500/25 bg-white/5 px-4 py-2 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/10 disabled:opacity-60"
           >
             Sign out of admin portal
           </button>
         </div>
       </main>
 
-      <Toast result={toast} onDismiss={() => setToast(null)} />
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }
