@@ -1,17 +1,13 @@
-export const dynamic = "force-dynamic";
-export const dynamicParams = true;
-
 import type { PublishedEventResult } from '../actions/public-actions';
 import { getPublishedResults } from '../actions/public-actions';
+import { resolvePublicMadrassaId } from '@/lib/utils/resolve-tenant';
 
-// Add this so Next.js doesn't crash trying to prerender dynamic route parameters during build
-export function generateStaticParams() {
-  return [{ madrassaId: "_" }];
-}
-
-interface PageProps {
-  params: Promise<{ madrassaId: string }>;
-}
+// This route resolves its tenant from a per-request header
+// (x-madrassa-subdomain), not from a static route param — so it must
+// always be rendered dynamically. There is no [madrassaId] segment in
+// this route, so the old `generateStaticParams` / `params` approach never
+// worked and has been removed.
+export const dynamic = 'force-dynamic';
 
 function medalStyle(rank: number) {
   switch (rank) {
@@ -39,8 +35,18 @@ function medalLabel(rank: number) {
   }
 }
 
-export default async function PublicResultsPage({ params }: PageProps) {
-  const { madrassaId } = await params;
+export default async function PublicResultsPage() {
+  const madrassaId = await resolvePublicMadrassaId();
+
+  if (!madrassaId) {
+    return (
+      <div className="px-6 py-10 max-w-3xl mx-auto text-center">
+        <p className="text-slate-400 text-sm">
+          Festival not found. Please check your link and try again.
+        </p>
+      </div>
+    );
+  }
 
   const result = await getPublishedResults(madrassaId);
 

@@ -1,3 +1,5 @@
+// app/(tenant)/admin/actions/event-actions.ts
+
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
@@ -239,6 +241,29 @@ export async function scheduleEvent(
     const madrassaId = session.madrassa_id;
 
     const supabase = await createClient();
+
+    // Explicitly verify both the event and the stage belong to this tenant
+    // before writing. Previously this relied entirely on RLS to catch a
+    // cross-tenant stageId/eventId — this adds an explicit application-level
+    // check so a single misconfigured RLS policy (or an RLS-context failure)
+    // can't turn into a foreign-tenant stage/event reference.
+    const [{ data: event, error: eventCheckError }, { data: stage, error: stageCheckError }] =
+      await Promise.all([
+        supabase.from("events").select("id").eq("id", eventId).eq("madrassa_id", madrassaId).maybeSingle(),
+        supabase.from("stages").select("id").eq("id", stageId).eq("madrassa_id", madrassaId).maybeSingle(),
+      ]);
+
+    if (eventCheckError || stageCheckError) {
+      console.error("scheduleEvent ownership check error:", eventCheckError ?? stageCheckError);
+      return { success: false, message: "Failed to schedule event." };
+    }
+
+    if (!event) {
+      return { success: false, message: "Event not found." };
+    }
+    if (!stage) {
+      return { success: false, message: "Stage not found." };
+    }
 
     const { data, error } = await supabase
       .from("event_schedules")

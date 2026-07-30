@@ -1,3 +1,5 @@
+// app/(super-admin)/actions/madrassa-actions.ts
+
 "use server";
 
 import { createClient } from "@supabase/supabase-js";
@@ -102,22 +104,27 @@ export async function createMadrassa(formData: FormData): Promise<ActionResult> 
     return { success: false, error: "Password must be at least 8 characters." };
   }
 
-  // Check for existing register_number or subdomain
-  const { data: existing, error: lookupError } = await supabase
-    .from("madrassas")
-    .select("id")
-    .or(`register_number.eq.${register_number},subdomain.eq.${subdomain}`)
-    .limit(1);
+  // Check for an existing register_number or subdomain using two explicit,
+  // safe equality queries instead of interpolating user input into a
+  // PostgREST `.or()` filter string. Building `.or()` from raw input lets a
+  // value containing a comma or parenthesis rewrite the filter's structure
+  // (e.g. injecting an unintended extra OR clause) rather than being treated
+  // as a literal value.
+  const [{ data: byRegNumber, error: regLookupError }, { data: bySubdomain, error: subLookupError }] =
+    await Promise.all([
+      supabase.from("madrassas").select("id").eq("register_number", register_number).limit(1),
+      supabase.from("madrassas").select("id").eq("subdomain", subdomain).limit(1),
+    ]);
 
-  if (lookupError) {
-    console.error("createMadrassa lookup error:", lookupError);
+  if (regLookupError || subLookupError) {
+    console.error("createMadrassa lookup error:", regLookupError ?? subLookupError);
     return {
       success: false,
       error: "Something went wrong while managing the Madrassa. Please try again.",
     };
   }
 
-  if (existing && existing.length > 0) {
+  if ((byRegNumber && byRegNumber.length > 0) || (bySubdomain && bySubdomain.length > 0)) {
     return {
       success: false,
       error: "A Madrassa with that Register Number or Subdomain already exists.",
@@ -146,10 +153,19 @@ export async function createMadrassa(formData: FormData): Promise<ActionResult> 
   return { success: true, message: `Madrassa "${name}" created successfully.` };
 }
 
-export async function toggleMadrassaStatus(
-  id: string,
-  currentStatus: boolean
-): Promise<ActionResult> {
+/**
+ * Toggles a madrassa's active status.
+ *
+ * NOTE: signature changed from `(id, currentStatus)` to `(id)`. The previous
+ * version flipped `is_active` based on whatever status the *client* last
+ * rendered, which is a TOCTOU race: two open tabs, a stale dashboard fetch,
+ * or a double-click could flip the status the wrong way with no error. This
+ * version reads the authoritative current value from the DB and writes the
+ * flip with an optimistic-lock `.eq("is_active", ...)` guard, so a
+ * concurrent change between the read and the write causes this update to
+ * affect zero rows instead of clobbering someone else's change.
+ */
+export async function toggleMadrassaStatus(id: string): Promise<ActionResult> {
   const session = await verifySuperAdminSession();
   if (!session) {
     return { success: false, error: "Unauthorized" };
@@ -159,10 +175,26 @@ export async function toggleMadrassaStatus(
     return { success: false, error: "Invalid Madrassa ID." };
   }
 
-  const { error } = await supabase
+  const { data: current, error: fetchError } = await supabase
     .from("madrassas")
-    .update({ is_active: !currentStatus })
-    .eq("id", id);
+    .select("is_active")
+    .eq("id", id)
+    .single();
+
+  if (fetchError || !current) {
+    console.error("toggleMadrassaStatus fetch error:", fetchError);
+    return { success: false, error: "Madrassa not found." };
+  }
+
+  const previousStatus = (current as any).is_active as boolean;
+  const newStatus = !previousStatus;
+
+  const { data: updated, error } = await supabase
+    .from("madrassas")
+    .update({ is_active: newStatus })
+    .eq("id", id)
+    .eq("is_active", previousStatus) // optimistic lock: no-ops if status changed since the read above
+    .select("id");
 
   if (error) {
     console.error("toggleMadrassaStatus error:", error);
@@ -172,10 +204,17 @@ export async function toggleMadrassaStatus(
     };
   }
 
+  if (!updated || updated.length === 0) {
+    return {
+      success: false,
+      error: "This Madrassa's status just changed elsewhere — please refresh and try again.",
+    };
+  }
+
   revalidatePath("/dashboard");
   return {
     success: true,
-    message: `Madrassa ${!currentStatus ? "activated" : "deactivated"} successfully.`,
+    message: `Madrassa ${newStatus ? "activated" : "deactivated"} successfully.`,
   };
 }
 

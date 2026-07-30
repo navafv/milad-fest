@@ -1,3 +1,5 @@
+// app/(tenant)/admin/exports/actions.ts
+
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
@@ -74,6 +76,17 @@ export async function getStudentsForIdCards(
   });
 }
 
+/**
+ * Exports published results as flat rows suitable for CSV.
+ *
+ * NOTE: the `results` table has no direct `student_id` foreign key and no
+ * `rank`/`points` columns of the shape previously assumed here — winners
+ * are stored polymorphically via `participant_id` + `participant_type`
+ * ('individual' | 'squad'), with `final_rank` and `points_awarded` as the
+ * actual column names. Individual participant names/register numbers are
+ * looked up separately from `students`; squad winners are labeled by their
+ * code letter since they have no single student record to attach a name to.
+ */
 export async function getResultsForExport(
   madrassaId: string
 ): Promise<ResultExportRow[]> {
@@ -85,16 +98,18 @@ export async function getResultsForExport(
     .from("results")
     .select(
       `
-      rank,
-      points,
-      students:student_id ( name, register_number_3digit ),
+      final_rank,
+      points_awarded,
+      code_letter,
+      participant_type,
+      participant_id,
       events:event_id ( name, madrassa_id )
     `
     )
     .eq("madrassa_id", madrassaId)
     .eq("is_published", true)
     .eq("events.madrassa_id", madrassaId)
-    .order("rank", { ascending: true });
+    .order("final_rank", { ascending: true });
 
   if (error) {
     console.error("getResultsForExport error:", error);
@@ -103,18 +118,48 @@ export async function getResultsForExport(
 
   if (!results) return [];
 
+  // Only individual winners need a name/register-number lookup from `students`;
+  // squad winners are represented by their code letter instead.
+  const individualIds = results
+    .filter((r: any) => r.participant_type === "individual")
+    .map((r: any) => r.participant_id);
+
+  const uniqueIndividualIds = [...new Set(individualIds)];
+
+  const { data: studentRows, error: studentsError } = uniqueIndividualIds.length
+    ? await supabase
+        .from("students")
+        .select("id, name, register_number_3digit")
+        .in("id", uniqueIndividualIds)
+        .eq("madrassa_id", madrassaId)
+    : { data: [] as any[], error: null };
+
+  if (studentsError) {
+    console.error("getResultsForExport student lookup error:", studentsError);
+    throw new Error("Failed to fetch students for export.");
+  }
+
+  const studentMap = new Map((studentRows ?? []).map((s: any) => [s.id, s]));
+
   return results
     .filter((r: any) => r.events)
     .map((r: any) => {
-      const student = Array.isArray(r.students) ? r.students[0] : r.students;
       const event = Array.isArray(r.events) ? r.events[0] : r.events;
+      const student =
+        r.participant_type === "individual" ? studentMap.get(r.participant_id) : null;
 
       return {
-        participant_name: student?.name ?? "Unknown",
-        participant_code: student?.register_number_3digit ?? "",
+        participant_name:
+          r.participant_type === "individual"
+            ? student?.name ?? "Unknown"
+            : `Squad ${r.code_letter}`,
+        participant_code:
+          r.participant_type === "individual"
+            ? student?.register_number_3digit ?? ""
+            : r.code_letter ?? "",
         event_name: event?.name ?? "Unknown",
-        rank: r.rank ?? "",
-        points: r.points ?? "",
+        rank: r.final_rank ?? "",
+        points: r.points_awarded ?? "",
       };
     });
 }

@@ -1,3 +1,5 @@
+// app/(tenant)/(public)/actions/public-actions.ts
+
 import { createClient } from "@/lib/supabase/server";
 
 interface ActionResult<T = undefined> {
@@ -197,6 +199,7 @@ export async function getPublishedResults(
 export interface TeamLeaderboardEntry {
   teamId: string;
   teamName: string;
+  colorCode: string | null;
   totalPoints: number;
   rank: number;
 }
@@ -204,6 +207,7 @@ export interface TeamLeaderboardEntry {
 interface TeamRow {
   id: string;
   name: string;
+  color_code: string | null;
 }
 
 interface TeamPointsRow {
@@ -219,7 +223,7 @@ export async function getTeamLeaderboard(
 
     const [{ data: teamsData, error: teamsError }, { data: resultsData, error: resultsError }] =
       await Promise.all([
-        supabase.from('teams').select('id, name').eq('madrassa_id', madrassaId),
+        supabase.from('teams').select('id, name, color_code').eq('madrassa_id', madrassaId),
         supabase
           .from('results')
           .select('team_id, points_awarded')
@@ -244,6 +248,7 @@ export async function getTeamLeaderboard(
       .map((t) => ({
         teamId: t.id,
         teamName: t.name,
+        colorCode: t.color_code ?? null,
         totalPoints: teamPoints.get(t.id) || 0,
       }))
       .sort((a, b) => b.totalPoints - a.totalPoints || a.teamName.localeCompare(b.teamName));

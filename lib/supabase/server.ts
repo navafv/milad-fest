@@ -1,3 +1,5 @@
+// lib/supabase/server.ts
+
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import type { Database } from '@/lib/types/database'
@@ -27,6 +29,13 @@ import { verifySession } from '@/app/(tenant)/admin/actions/auth-actions'
  * set_config. RLS policies that key off current_madrassa_id() then enforce
  * tenant isolation at the database layer, independent of any application
  * code correctly scoping .eq("madrassa_id", ...) on every query.
+ *
+ * IMPORTANT: if setting that RLS context fails, we now throw instead of
+ * merely logging. This mechanism is the last line of defense against a
+ * cross-tenant data leak if application code ever forgets a `.eq("madrassa_id", ...)`
+ * filter — silently continuing without it would mean every subsequent query
+ * on this client runs with no tenant context, which is a security-relevant
+ * failure, not a soft one.
  */
 export async function createClient() {
   const cookieStore = await cookies()
@@ -53,22 +62,35 @@ export async function createClient() {
     },
   )
 
-  // After creating `client`:
-  try {
-    const session = await verifySession()
+  // After creating `client`, push the verified session's tenant into the
+  // Postgres session for RLS. A failure here must not be silently
+  // swallowed — see note above.
+  const session = await verifySession()
 
-    if (session?.madrassa_id) {
-      const untypedClient = client as unknown as {
-        rpc: (fn: string, args: Record<string, unknown>) => Promise<unknown>
-      }
-      await untypedClient.rpc('set_config', {
-        setting_name: 'app.current_madrassa_id',
-        new_value: session.madrassa_id,
-        is_local: true,
-      })
+  if (session?.madrassa_id) {
+    const untypedClient = client as unknown as {
+      rpc: (
+        fn: string,
+        args: Record<string, unknown>
+      ) => Promise<{ error: { message: string } | null }>
     }
-  } catch (error) {
-    console.error('createClient: failed to set tenant RLS context:', error)
+
+    const { error: rpcError } = await untypedClient.rpc('set_config', {
+      setting_name: 'app.current_madrassa_id',
+      new_value: session.madrassa_id,
+      is_local: true,
+    })
+
+    if (rpcError) {
+      console.error(
+        'CRITICAL: failed to set RLS tenant context via set_config:',
+        rpcError,
+        { madrassaId: session.madrassa_id }
+      )
+      throw new Error(
+        'Failed to establish tenant security context. Please try again.'
+      )
+    }
   }
 
   return client

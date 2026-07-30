@@ -1,3 +1,5 @@
+// app/(tenant)/judge/actions/judge-actions.ts
+
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
@@ -201,8 +203,9 @@ export async function getAssignedEvents(): Promise<ActionResult<AssignedEvent[]>
       return { success: false, message: 'Unauthorized: no active judge session.' };
     }
 
-    const judgeId = session.judgeId; 
-    
+    const judgeId = session.judgeId;
+    const madrassaId = session.madrassaId;
+
     const supabase = await createClient();
 
     const { data, error } = await supabase
@@ -212,7 +215,8 @@ export async function getAssignedEvents(): Promise<ActionResult<AssignedEvent[]>
           id, name, category, status, scheduled_at, rubrics
         )
       `)
-      .eq('judge_id', judgeId);
+      .eq('judge_id', judgeId)
+      .eq('madrassa_id', madrassaId);
 
     if (error) throw error;
 
@@ -268,9 +272,9 @@ export async function getEventParticipantsByCodeLetter(
     if (!session) {
       return { success: false, message: 'Unauthorized: no active judge session.' };
     }
-    
+
     const madrassaId = session.madrassaId;
-    const judgeId = session.judgeId; 
+    const judgeId = session.judgeId;
 
     const supabase = await createClient();
 
@@ -346,11 +350,83 @@ export async function submitJudgeScore(
       return { success: false, message: 'Unauthorized: no active judge session.' };
     }
 
-    if (totalScore < 0) {
-      return { success: false, message: 'Total score cannot be negative.' };
+    const supabase = await createClient();
+
+    // 1. Verify the judge is actually assigned to this event, in this tenant.
+    // Without this check, any judge session valid for the tenant could score
+    // events they were never assigned to.
+    const { data: assignment, error: assignError } = await supabase
+      .from('event_judges')
+      .select('event_id')
+      .eq('event_id', eventId)
+      .eq('judge_id', session.judgeId)
+      .eq('madrassa_id', session.madrassaId)
+      .maybeSingle();
+
+    if (assignError || !assignment) {
+      return { success: false, message: 'You are not assigned to judge this event.' };
     }
 
-    const supabase = await createClient();
+    // 2. Load the event's rubric and status server-side — never trust the
+    // client's maxScore or totalScore.
+    const { data: eventRow, error: eventError } = await supabase
+      .from('events')
+      .select('rubrics, status')
+      .eq('id', eventId)
+      .eq('madrassa_id', session.madrassaId)
+      .single();
+
+    if (eventError || !eventRow) {
+      return { success: false, message: 'Event not found.' };
+    }
+
+    if ((eventRow as any).status === 'published') {
+      return { success: false, message: 'This event has already been published; scores are locked.' };
+    }
+
+    const rubrics: { key: string; label: string; maxScore: number }[] = Array.isArray(
+      (eventRow as any).rubrics
+    )
+      ? (eventRow as any).rubrics
+      : typeof (eventRow as any).rubrics === 'string'
+      ? JSON.parse((eventRow as any).rubrics)
+      : [
+          { key: 'rhythm', label: 'Rhythm', maxScore: 10 },
+          { key: 'content', label: 'Content', maxScore: 10 },
+          { key: 'expression', label: 'Expression', maxScore: 10 },
+        ];
+
+    // Validate every submitted rubric value against its server-known max.
+    let computedMax = 0;
+    for (const rubric of rubrics) {
+      computedMax += rubric.maxScore;
+      const value = scoreDataJson[rubric.key];
+      if (typeof value !== 'number' || Number.isNaN(value) || value < 0 || value > rubric.maxScore) {
+        return {
+          success: false,
+          message: `Score for "${rubric.label}" must be between 0 and ${rubric.maxScore}.`,
+        };
+      }
+    }
+
+    // Reject any stray keys in the payload that aren't part of this event's rubric.
+    const validKeys = new Set(rubrics.map((r) => r.key));
+    for (const key of Object.keys(scoreDataJson)) {
+      if (!validKeys.has(key)) {
+        return { success: false, message: `Unexpected rubric field "${key}".` };
+      }
+    }
+
+    // Recompute the total server-side rather than trusting the client's
+    // totalScore — this is the actual value that gets persisted.
+    const recomputedTotal = Object.values(scoreDataJson).reduce(
+      (sum, v) => sum + (Number(v) || 0),
+      0
+    );
+
+    if (recomputedTotal < 0 || recomputedTotal > computedMax) {
+      return { success: false, message: 'Total score exceeds the maximum allowed for this event.' };
+    }
 
     const upsertData = {
       madrassa_id: session.madrassaId,
@@ -359,7 +435,7 @@ export async function submitJudgeScore(
       participant_type: participantType,
       participant_id: participantId,
       score_data: scoreDataJson,
-      total_score: totalScore,
+      total_score: recomputedTotal,
       updated_at: new Date().toISOString()
     };
 
@@ -387,16 +463,20 @@ export interface AggregatedParticipantScore {
   scores: { judgeId: string; totalScore: number }[];
 }
 
+/**
+ * ADMIN-ONLY: returns per-judge score breakdowns for an event.
+ *
+ * This intentionally requires an admin session, not a judge session.
+ * Exposing individual judges' raw scores to other judges before an event
+ * is finalized creates an incentive/opportunity for judges to match or
+ * react to each other's scoring, undermining independent judging.
+ */
 export async function calculateMultiJudgeAverage(
+  madrassaId: string,
   eventId: string
 ): Promise<ActionResult<AggregatedParticipantScore[]>> {
   try {
-    const session = await getCurrentJudgeSession();
-    if (!session) {
-      return { success: false, message: 'Unauthorized: no active judge session.' };
-    }
-    
-    const madrassaId = session.madrassaId;
+    await requireAdminSession(madrassaId);
 
     const supabase = await createClient();
 
@@ -473,6 +553,9 @@ export async function calculateMultiJudgeAverage(
     return { success: true, data: results };
   } catch (error) {
     console.error('calculateMultiJudgeAverage error:', error);
+    if (error instanceof Error && (error as any).status) {
+      return { success: false, message: error.message };
+    }
     return { success: false, message: 'Failed to calculate averages.' };
   }
 }

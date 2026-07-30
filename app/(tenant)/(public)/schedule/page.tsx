@@ -1,11 +1,14 @@
 import type { ScheduleItem } from '../actions/public-actions';
 import { getPublicSchedule } from '../actions/public-actions';
+import { resolvePublicMadrassaId } from '@/lib/utils/resolve-tenant';
 
-export const revalidate = 60;
-
-interface PageProps {
-  params: Promise<{ madrassaId: string }>;
-}
+// This route resolves its tenant from a per-request header
+// (x-madrassa-subdomain), not from a static route param — so it must
+// always be rendered dynamically. The previous `export const revalidate = 60`
+// cached this page by URL path only, which meant one tenant's schedule could
+// be served to the next tenant that hit "/schedule" within the revalidate
+// window. Do not reintroduce a time-based `revalidate` here.
+export const dynamic = 'force-dynamic';
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
@@ -38,21 +41,30 @@ function groupByDay(schedule: ScheduleItem[]): [string, ScheduleItem[]][] {
   return Array.from(groups.entries());
 }
 
-export default async function PublicSchedulePage({ params }: PageProps) {
-  const { madrassaId } = await params;
+export default async function PublicSchedulePage() {
+  const madrassaId = await resolvePublicMadrassaId();
+
+  if (!madrassaId) {
+    return (
+      <div className="px-6 py-10 max-w-3xl mx-auto text-center">
+        <p className="text-slate-400 text-sm">
+          Festival not found. Please check your link and try again.
+        </p>
+      </div>
+    );
+  }
 
   const result = await getPublicSchedule(madrassaId);
 
-  const schedule = result.success && result.data ? result.data : [];
+  const schedule: ScheduleItem[] = result.success && result.data ? result.data : [];
   const error = result.success ? null : result.message ?? 'Failed to load schedule.';
-
-  const groupedByDay = groupByDay(schedule);
+  const groupedSchedule = groupByDay(schedule);
 
   return (
     <div className="px-6 py-10 max-w-3xl mx-auto">
       <div className="text-center mb-10">
-        <h1 className="text-3xl font-black text-white tracking-tight mb-2">Live Schedule</h1>
-        <p className="text-slate-400 text-sm">Follow the itinerary across all stages</p>
+        <h1 className="text-3xl font-black text-white tracking-tight mb-2">Event Schedule</h1>
+        <p className="text-slate-400 text-sm">When and where each event is happening</p>
       </div>
 
       {error && (
@@ -62,73 +74,29 @@ export default async function PublicSchedulePage({ params }: PageProps) {
       )}
 
       {!error && schedule.length === 0 && (
-        <p className="text-slate-500 text-center text-sm">No schedule has been published yet.</p>
+        <p className="text-slate-500 text-center text-sm">No events have been scheduled yet.</p>
       )}
 
-      <div className="flex flex-col gap-10">
-        {groupedByDay.map(([day, items]) => (
+      <div className="flex flex-col gap-8">
+        {groupedSchedule.map(([day, items]) => (
           <div key={day}>
-            <h2 className="text-emerald-300 text-sm font-semibold uppercase tracking-widest mb-4">
-              {day}
-            </h2>
-            <div className="relative pl-6 border-l border-white/10 flex flex-col gap-6">
+            <h2 className="text-white font-bold text-sm uppercase tracking-widest mb-3">{day}</h2>
+            <div className="flex flex-col gap-2">
               {items.map((item) => (
-                <div key={item.eventId} className="relative">
-                  <span className="absolute -left-[27px] top-1.5 h-3 w-3 rounded-full bg-emerald-400 ring-4 ring-emerald-500/15" />
-                  <div className="bg-white/5 border border-white/10 rounded-2xl px-5 py-4">
-                    <div className="flex items-start justify-between gap-3 mb-2">
-                      <div>
-                        <h3 className="text-white font-semibold">{item.eventName}</h3>
-                        {item.category && (
-                          <p className="text-slate-500 text-xs mt-0.5">{item.category}</p>
-                        )}
-                      </div>
-                      <span className={statusBadge(item.status)}>{item.status}</span>
-                    </div>
-                    <div className="flex items-center gap-4 text-sm text-slate-400">
-                      <span className="flex items-center gap-1.5">
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          className="h-4 w-4"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={1.5}
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"
-                          />
-                        </svg>
-                        {formatTime(item.startTime)}
-                        {item.endTime ? ` - ${formatTime(item.endTime)}` : ''}
-                      </span>
-                      {item.stageName && (
-                        <span className="flex items-center gap-1.5">
-                          <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            className="h-4 w-4"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                            strokeWidth={1.5}
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"
-                            />
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25s-7.5-4.108-7.5-11.25a7.5 7.5 0 1115 0z"
-                            />
-                          </svg>
-                          {item.stageName}
-                        </span>
-                      )}
-                    </div>
+                <div
+                  key={item.eventId}
+                  className="flex items-center justify-between bg-white/5 border border-white/10 rounded-xl px-4 py-3"
+                >
+                  <div className="flex flex-col">
+                    <span className="text-white font-semibold text-sm">{item.eventName}</span>
+                    <span className="text-slate-500 text-xs mt-0.5">
+                      {item.category ?? 'General'}
+                      {item.stageName ? ` · ${item.stageName}` : ''}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-slate-400 text-xs">{formatTime(item.startTime)}</span>
+                    <span className={statusBadge(item.status)}>{item.status}</span>
                   </div>
                 </div>
               ))}

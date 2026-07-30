@@ -1,3 +1,5 @@
+// app/(super-admin)/dashboard/page.tsx
+
 "use client";
 
 import { useState, useTransition, useEffect, useCallback } from "react";
@@ -31,16 +33,19 @@ function StatusBadge({ active }: { active: boolean }) {
 function ToggleButton({
   id,
   isActive,
+  disabled,
   onToggle,
 }: {
   id: string;
   isActive: boolean;
-  onToggle: (id: string, current: boolean) => void;
+  disabled?: boolean;
+  onToggle: (id: string) => void;
 }) {
   return (
     <button
-      onClick={() => onToggle(id, isActive)}
-      className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+      onClick={() => onToggle(id)}
+      disabled={disabled}
+      className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
         isActive
           ? "bg-rose-50 text-rose-600 hover:bg-rose-100 focus:ring-rose-400 ring-1 ring-rose-200"
           : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 focus:ring-emerald-400 ring-1 ring-emerald-200"
@@ -123,6 +128,7 @@ export default function SuperAdminDashboard() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<ActionResult | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [togglingId, setTogglingId] = useState<string | null>(null);
   const [formKey, setFormKey] = useState(0); // reset form after submit
 
   const loadMadrassas = useCallback(async () => {
@@ -146,11 +152,23 @@ export default function SuperAdminDashboard() {
     });
   }
 
-  function handleToggle(id: string, current: boolean) {
+  function handleToggle(id: string) {
+    // toggleMadrassaStatus no longer takes a `currentStatus` argument — it
+    // now reads the authoritative status from the DB itself and uses an
+    // optimistic lock, so a stale/duplicate click here just gets rejected
+    // with a "refresh and try again" error instead of flipping the wrong way.
+    setTogglingId(id);
     startTransition(async () => {
-      const result = await toggleMadrassaStatus(id, current);
+      const result = await toggleMadrassaStatus(id);
       setToast(result);
-      if (result.success) await loadMadrassas();
+      if (result.success) {
+        await loadMadrassas();
+      } else {
+        // The status may have changed elsewhere since our last load —
+        // refresh the table so the displayed state matches the DB again.
+        await loadMadrassas();
+      }
+      setTogglingId(null);
     });
   }
 
@@ -310,6 +328,7 @@ export default function SuperAdminDashboard() {
                         <ToggleButton
                           id={m.id}
                           isActive={m.is_active}
+                          disabled={togglingId === m.id}
                           onToggle={handleToggle}
                         />
                       </td>
