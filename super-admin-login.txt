@@ -1,0 +1,15 @@
+const jwt = require('jsonwebtoken');
+const token = jwt.sign(
+  { 
+    role: 'super_admin', 
+    superAdminId: 'master-admin-001'
+  }, 
+  '3861ea98821659a583903980ba0e404e6dd86675306516e77f86c6113b3ae79f', 
+  { expiresIn: '24h' }
+);
+console.log(token);
+
+document.cookie = "super_admin_session=PASTE_YOUR_TOKEN_HERE; path=/; max-age=86400; Secure; SameSite=Lax";
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic3VwZXJfYWRtaW4iLCJpYXQiOjE3ODU0MzI3MjIsImV4cCI6MTc4NTQzNjMyMn0.Zy2-XD1_JHnOFXDnePnAn-KKqH5t5W_cyk6HH_j1bE0
+
+document.cookie = "super_admin_session=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic3VwZXJfYWRtaW4iLCJpYXQiOjE3ODU0MzI3MjIsImV4cCI6MTc4NTQzNjMyMn0.Zy2-XD1_JHnOFXDnePnAn-KKqH5t5W_cyk6HH_j1bE0; path=/; max-age=86400; Secure; SameSite=Lax";
