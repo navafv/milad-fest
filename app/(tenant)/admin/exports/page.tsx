@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { getResultsForExport, type ResultExportRow } from "./actions";
+import { verifySession } from "../actions/auth-actions";
 
 function toCsv(rows: ResultExportRow[]): string {
   const headers = [
@@ -49,16 +50,35 @@ function downloadCsv(csv: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-export default function ExportsPage({
-  params,
-}: {
-  params?: { madrassaId?: string };
-}) {
-  const madrassaId = params?.madrassaId ?? "";
+export default function ExportsPage() {
+  // ─── Tenant resolution ────────────────────────────────────────────────
+  // This route has no `[madrassaId]` dynamic segment — the app resolves
+  // tenants via a cookie/header, not route params. `verifySession()` is a
+  // server action that reads the httpOnly `madrassa_session` cookie
+  // server-side and returns the authenticated admin's madrassa_id, which
+  // is the only trustworthy source for it here.
+  const [madrassaId, setMadrassaId] = useState<string | null>(null);
+  const [sessionLoading, setSessionLoading] = useState(true);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    (async () => {
+      const session = await verifySession();
+      if (!session) {
+        window.location.href = "/admin/login";
+        return;
+      }
+      setMadrassaId(session.madrassa_id);
+      setSessionLoading(false);
+    })();
+  }, []);
+
   const handleDownloadResults = () => {
+    if (!madrassaId) return;
+
     setError(null);
     startTransition(async () => {
       try {
@@ -77,6 +97,17 @@ export default function ExportsPage({
     });
   };
 
+  if (sessionLoading || !madrassaId) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-10 w-10 border-4 border-emerald-500/30 border-t-emerald-400 rounded-full animate-spin" />
+          <p className="text-slate-400 text-sm">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950">
       <div className="mx-auto max-w-4xl px-4 py-8">
@@ -86,6 +117,12 @@ export default function ExportsPage({
         <p className="mt-1 text-sm text-slate-500">
           Generate ID cards, export results, and issue digital certificates.
         </p>
+
+        {sessionError && (
+          <div className="mt-6 rounded-xl border border-rose-500/25 bg-rose-500/10 px-4 py-3">
+            <p className="text-rose-300 text-sm">{sessionError}</p>
+          </div>
+        )}
 
         <div className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-3">
           {/* Results CSV */}
@@ -129,7 +166,7 @@ export default function ExportsPage({
             </div>
             <div className="mt-4">
               <Link
-                href="/admin/exports/id-cards"
+                href={`/admin/exports/id-cards?madrassaId=${encodeURIComponent(madrassaId)}`}
                 className="inline-flex w-full items-center justify-center rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-400 active:scale-[0.98]"
               >
                 Open ID Cards

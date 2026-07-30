@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'next/navigation';
 import {
   getEventScoreboard,
   overrideRanksAndTieBreakers,
@@ -11,6 +10,7 @@ import {
   type EventOption,
   type RankOverrideInput,
 } from '../actions/result-actions';
+import { verifySession } from '../actions/auth-actions';
 import { Toast, type ToastState } from '@/components/ui/toast';
 
 function EmptyState({
@@ -34,8 +34,15 @@ function EmptyState({
 }
 
 export default function AdminResultsPage() {
-  const params = useParams();
-  const madrassaId = (params?.madrassaId as string) ?? '';
+  // ─── Tenant resolution ────────────────────────────────────────────────
+  // This app resolves the tenant via a cookie/header (x-madrassa-subdomain)
+  // rather than a dynamic route segment, so there is no `params.madrassaId`
+  // to read here. `verifySession()` is a server action that reads the
+  // httpOnly `madrassa_session` cookie server-side and returns the
+  // authenticated admin's madrassa_id — this is the only trustworthy
+  // source for it on this page.
+  const [madrassaId, setMadrassaId] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
 
   const [events, setEvents] = useState<EventOption[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string>('');
@@ -48,8 +55,24 @@ export default function AdminResultsPage() {
   const [toast, setToast] = useState<ToastState | null>(null);
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
 
+  // Resolve the authenticated admin's tenant on mount.
   useEffect(() => {
     (async () => {
+      const session = await verifySession();
+      if (!session) {
+        window.location.href = '/admin/login';
+        return;
+      }
+      setMadrassaId(session.madrassa_id);
+    })();
+  }, []);
+
+  // Load events for audit once we know which tenant we're operating on.
+  useEffect(() => {
+    if (!madrassaId) return;
+
+    (async () => {
+      setLoading(true);
       const result = await getEventsForAudit(madrassaId);
       if (result.success && result.data) {
         setEvents(result.data);
@@ -57,6 +80,7 @@ export default function AdminResultsPage() {
           setSelectedEventId(result.data[0].id);
         }
       } else {
+        setSessionError(result.message ?? 'Failed to load events.');
         setToast({ variant: 'error', message: result.message ?? 'Failed to load events.' });
       }
       setLoading(false);
@@ -64,11 +88,14 @@ export default function AdminResultsPage() {
   }, [madrassaId]);
 
   useEffect(() => {
-    if (!selectedEventId) return;
+    if (!madrassaId || !selectedEventId) return;
     loadScoreboard(selectedEventId);
-  }, [selectedEventId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedEventId, madrassaId]);
 
   async function loadScoreboard(eventId: string) {
+    if (!madrassaId) return;
+
     setLoadingScoreboard(true);
     setScoreboard([]); // prevents a stale-event flash while the new one loads
     setToast(null);
@@ -104,6 +131,8 @@ export default function AdminResultsPage() {
   }
 
   async function handleSaveOverrides() {
+    if (!madrassaId) return;
+
     setSavingOverrides(true);
     setToast(null);
 
@@ -138,6 +167,8 @@ export default function AdminResultsPage() {
   }
 
   async function handlePublish() {
+    if (!madrassaId) return;
+
     setPublishing(true);
     setToast(null);
     setShowPublishConfirm(false);
@@ -165,7 +196,7 @@ export default function AdminResultsPage() {
     return entry.autoRank;
   }
 
-  if (loading) {
+  if (loading || !madrassaId) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-950">
         <div className="flex flex-col items-center gap-3">
@@ -184,6 +215,12 @@ export default function AdminResultsPage() {
       </header>
 
       <div className="px-6 pt-6 max-w-5xl mx-auto">
+        {sessionError && (
+          <div className="mb-6 flex items-start gap-3 bg-rose-500/10 border border-rose-500/25 rounded-xl px-4 py-3">
+            <p className="text-rose-300 text-sm">{sessionError}</p>
+          </div>
+        )}
+
         <div className="mb-6">
           <label htmlFor="event" className="block text-xs font-medium text-slate-400 mb-1.5">
             Select Event

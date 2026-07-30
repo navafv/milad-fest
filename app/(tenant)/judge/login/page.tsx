@@ -1,24 +1,63 @@
 'use client';
 
-import { useState, useTransition } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useEffect, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import { loginJudge } from '../actions/judge-actions';
+
+/**
+ * Inline server action, colocated in this client component file.
+ *
+ * This app resolves the active tenant via the `x-madrassa-subdomain`
+ * request header (set by middleware from either `?tenant=xyz` or the
+ * `active_tenant` cookie) — never from a route param — so there is no
+ * `useParams().subdomain` to read here. `headers()`/`cookies()` are
+ * server-only APIs, so this small lookup is expressed as a Server
+ * Action ("use server") that the client component below can call
+ * directly, rather than trying to read them client-side.
+ */
+async function getActiveTenantSubdomain(): Promise<string> {
+  'use server';
+
+  const { headers, cookies } = await import('next/headers');
+
+  const headerStore = await headers();
+  const fromHeader = headerStore.get('x-madrassa-subdomain');
+  if (fromHeader) return fromHeader;
+
+  const cookieStore = await cookies();
+  return cookieStore.get('active_tenant')?.value ?? '';
+}
 
 export default function JudgeLoginPage() {
   const router = useRouter();
-  const params = useParams();
-  const subdomain = (params?.subdomain as string) ?? '';
 
+  const [subdomain, setSubdomain] = useState('');
+  const [subdomainLoading, setSubdomainLoading] = useState(true);
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
   const [showPin, setShowPin] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
+  useEffect(() => {
+    (async () => {
+      const resolved = await getActiveTenantSubdomain();
+      setSubdomain(resolved);
+      setSubdomainLoading(false);
+      if (!resolved) {
+        setError('Could not determine your Madrassa. Please use the link provided by your Madrassa admin.');
+      }
+    })();
+  }, []);
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
+    if (!subdomain) {
+      setError('Could not determine your Madrassa. Please use the link provided by your Madrassa admin.');
+      return;
+    }
     if (!/^\d{10,15}$/.test(phone)) {
       setError('Enter a valid phone number.');
       return;
@@ -59,7 +98,9 @@ export default function JudgeLoginPage() {
             </svg>
           </div>
           <h1 className="text-2xl font-bold text-white tracking-tight">Judge Portal</h1>
-          <p className="text-emerald-200/70 text-sm mt-1">Milad Fest &middot; {subdomain}</p>
+          <p className="text-emerald-200/70 text-sm mt-1">
+            Milad Fest &middot; {subdomainLoading ? '…' : subdomain || 'Unknown Madrassa'}
+          </p>
         </div>
 
         <form
@@ -154,7 +195,7 @@ export default function JudgeLoginPage() {
 
           <button
             type="submit"
-            disabled={isPending}
+            disabled={isPending || subdomainLoading}
             className="w-full mt-6 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-500/50 text-emerald-950 font-semibold py-3.5 min-h-[44px] text-base transition active:scale-[0.98]"
           >
             {isPending ? 'Signing in...' : 'Sign In'}

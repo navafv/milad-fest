@@ -1,5 +1,3 @@
-// app/(super-admin)/dashboard/page.tsx
-
 "use client";
 
 import { useState, useTransition, useEffect, useCallback } from "react";

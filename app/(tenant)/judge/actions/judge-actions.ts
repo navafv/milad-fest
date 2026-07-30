@@ -1,5 +1,3 @@
-// app/(tenant)/judge/actions/judge-actions.ts
-
 'use server';
 
 import { createClient } from '@/lib/supabase/server';

@@ -1,5 +1,3 @@
-// app/(tenant)/(public)/actions/public-actions.ts
-
 import { createClient } from "@/lib/supabase/server";
 
 interface ActionResult<T = undefined> {

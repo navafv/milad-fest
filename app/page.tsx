@@ -1,5 +1,3 @@
-// app/page.tsx
-
 import Link from "next/link";
 import { getTeamLeaderboard } from "./(tenant)/(public)/actions/public-actions";
 import { resolvePublicMadrassaId } from "@/lib/utils/resolve-tenant";
