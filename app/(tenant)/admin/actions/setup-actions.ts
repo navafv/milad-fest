@@ -2,24 +2,41 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { requireAdminSession } from "@/lib/utils/tenant-auth";
+
+interface ActionResult<T = undefined> {
+  success: boolean;
+  message?: string;
+  data?: T;
+}
 
 export async function createTeam(
   madrassaId: string,
   name: string,
   colorCode: string
-) {
-  const supabase = await createClient();
+): Promise<ActionResult<any>> {
+  try {
+    await requireAdminSession(madrassaId);
 
-  const { data, error } = await supabase
-    .from("teams")
-    .insert({ madrassa_id: madrassaId, name, color_code: colorCode } as any)
-    .select()
-    .single();
+    const supabase = await createClient();
 
-  if (error) throw new Error(error.message);
+    const { data, error } = await supabase
+      .from("teams")
+      .insert({ madrassa_id: madrassaId, name, color_code: colorCode } as any)
+      .select()
+      .single();
 
-  revalidatePath("/admin/students");
-  return data;
+    if (error) {
+      console.error("createTeam error:", error);
+      return { success: false, message: "Failed to create team." };
+    }
+
+    revalidatePath("/admin/students");
+    return { success: true, data };
+  } catch (error) {
+    console.error("createTeam error:", error);
+    return { success: false, message: "Failed to create team." };
+  }
 }
 
 export async function createCategory(
@@ -27,24 +44,34 @@ export async function createCategory(
   name: string,
   startingNumber: number,
   isGeneral: boolean
-) {
-  const supabase = await createClient();
+): Promise<ActionResult<any>> {
+  try {
+    await requireAdminSession(madrassaId);
 
-  const { data, error } = await supabase
-    .from("categories")
-    .insert({
-      madrassa_id: madrassaId,
-      name,
-      starting_number: startingNumber,
-      is_general: isGeneral,
-    } as any)
-    .select()
-    .single();
+    const supabase = await createClient();
 
-  if (error) throw new Error(error.message);
+    const { data, error } = await supabase
+      .from("categories")
+      .insert({
+        madrassa_id: madrassaId,
+        name,
+        starting_number: startingNumber,
+        is_general: isGeneral,
+      } as any)
+      .select()
+      .single();
 
-  revalidatePath("/admin/students");
-  return data;
+    if (error) {
+      console.error("createCategory error:", error);
+      return { success: false, message: "Failed to create category." };
+    }
+
+    revalidatePath("/admin/students");
+    return { success: true, data };
+  } catch (error) {
+    console.error("createCategory error:", error);
+    return { success: false, message: "Failed to create category." };
+  }
 }
 
 interface StudentRow {
@@ -58,64 +85,81 @@ interface StudentRow {
 export async function bulkImportStudents(
   madrassaId: string,
   studentsArray: StudentRow[]
-) {
-  const supabase = await createClient();
+): Promise<ActionResult<any>> {
+  try {
+    await requireAdminSession(madrassaId);
 
-  // Fetch categories to get starting_numbers
-  const categoryIds = [...new Set(studentsArray.map((s) => s.category_id))];
+    const supabase = await createClient();
 
-  const { data: categories, error: catError } = await supabase
-    .from("categories")
-    .select("id, starting_number")
-    .in("id", categoryIds);
+    // Fetch categories to get starting_numbers
+    const categoryIds = [...new Set(studentsArray.map((s) => s.category_id))];
 
-  if (catError) throw new Error(catError.message);
+    const { data: categories, error: catError } = await supabase
+      .from("categories")
+      .select("id, starting_number")
+      .in("id", categoryIds)
+      .eq("madrassa_id", madrassaId);
 
-  // Map categoryId -> next register number counter
-  const categoryCounters: Record<string, number> = {};
-  for (const cat of (categories as any[]) ?? []) {
-    categoryCounters[cat.id] = cat.starting_number;
-  }
-
-  // Fetch existing max register numbers per category to avoid collisions
-  const { data: existingStudents, error: existErr } = await supabase
-    .from("students")
-    .select("category_id, register_number_3digit")
-    .in("category_id", categoryIds)
-    .eq("madrassa_id", madrassaId);
-
-  if (existErr) throw new Error(existErr.message);
-
-  // Advance counters past existing max
-  for (const s of (existingStudents as any[]) ?? []) {
-    const current = categoryCounters[s.category_id] ?? 1;
-    if (s.register_number_3digit >= current) {
-      categoryCounters[s.category_id] = s.register_number_3digit + 1;
+    if (catError) {
+      console.error("bulkImportStudents category fetch error:", catError);
+      return { success: false, message: "Failed to load categories." };
     }
+
+    // Map categoryId -> next register number counter
+    const categoryCounters: Record<string, number> = {};
+    for (const cat of (categories as any[]) ?? []) {
+      categoryCounters[cat.id] = cat.starting_number;
+    }
+
+    // Fetch existing max register numbers per category to avoid collisions
+    const { data: existingStudents, error: existErr } = await supabase
+      .from("students")
+      .select("category_id, register_number_3digit")
+      .in("category_id", categoryIds)
+      .eq("madrassa_id", madrassaId);
+
+    if (existErr) {
+      console.error("bulkImportStudents existing students fetch error:", existErr);
+      return { success: false, message: "Failed to check existing register numbers." };
+    }
+
+    // Advance counters past existing max
+    for (const s of (existingStudents as any[]) ?? []) {
+      const current = categoryCounters[s.category_id] ?? 1;
+      if (s.register_number_3digit >= current) {
+        categoryCounters[s.category_id] = s.register_number_3digit + 1;
+      }
+    }
+
+    const toInsert = studentsArray.map((student) => {
+      const regNum = categoryCounters[student.category_id] ?? 1;
+      categoryCounters[student.category_id] = regNum + 1;
+
+      return {
+        madrassa_id: madrassaId,
+        name: student.name,
+        gender: student.gender,
+        class: student.class,
+        category_id: student.category_id || null,
+        team_id: student.team_id || null,
+        register_number_3digit: regNum,
+      };
+    });
+
+    const { data, error } = await supabase
+      .from("students")
+      .insert(toInsert as any)
+      .select();
+
+    if (error) {
+      console.error("bulkImportStudents insert error:", error);
+      return { success: false, message: "Failed to import students." };
+    }
+
+    revalidatePath("/admin/students");
+    return { success: true, data };
+  } catch (error) {
+    console.error("bulkImportStudents error:", error);
+    return { success: false, message: "Failed to import students." };
   }
-
-  const toInsert = studentsArray.map((student) => {
-    const regNum = categoryCounters[student.category_id] ?? 1;
-    categoryCounters[student.category_id] = regNum + 1;
-
-    return {
-      madrassa_id: madrassaId,
-      name: student.name,
-      gender: student.gender,
-      class: student.class,
-      category_id: student.category_id || null,
-      team_id: student.team_id || null,
-      register_number_3digit: regNum,
-    };
-  });
-
-  const { data, error } = await supabase
-    .from("students")
-    .insert(toInsert as any)
-    .select();
-
-  if (error) throw new Error(error.message);
-
-  revalidatePath("/admin/students");
-  return data;
 }

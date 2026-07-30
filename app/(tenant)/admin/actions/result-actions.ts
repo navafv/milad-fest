@@ -1,8 +1,8 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
-import { randomUUID } from 'crypto';
 import { revalidatePath } from 'next/cache';
+import { requireAdminSession } from '@/lib/utils/tenant-auth';
 
 interface ActionResult<T = undefined> {
   success: boolean;
@@ -27,6 +27,8 @@ export async function getEventScoreboard(
   eventId: string
 ): Promise<ActionResult<ScoreboardEntry[]>> {
   try {
+    await requireAdminSession(madrassaId);
+
     const supabase = await createClient();
 
     // Fetch all related data in parallel using Supabase
@@ -36,8 +38,8 @@ export async function getEventScoreboard(
       { data: scores },
       { data: overrides }
     ] = await Promise.all([
-      supabase.from('event_participants').select('id, code_letter').eq('event_id', eventId).eq('participant_type', 'individual'),
-      supabase.from('event_squads').select('id, code_letter, team_id').eq('event_id', eventId),
+      supabase.from('event_participants').select('id, code_letter').eq('event_id', eventId).eq('madrassa_id', madrassaId).eq('participant_type', 'individual'),
+      supabase.from('event_squads').select('id, code_letter, team_id').eq('event_id', eventId).eq('madrassa_id', madrassaId),
       supabase.from('scores').select('participant_id, participant_type, judge_id, total_score').eq('event_id', eventId).eq('madrassa_id', madrassaId),
       supabase.from('rank_overrides').select('participant_id, participant_type, override_rank').eq('event_id', eventId).eq('madrassa_id', madrassaId)
     ]);
@@ -142,6 +144,8 @@ export async function overrideRanksAndTieBreakers(
   rankOverrides: RankOverrideInput[]
 ): Promise<ActionResult> {
   try {
+    await requireAdminSession(madrassaId);
+
     const supabase = await createClient();
 
     for (const o of rankOverrides) {
@@ -188,6 +192,8 @@ export async function publishEventResults(
   eventId: string
 ): Promise<ActionResult<{ publishedCount: number }>> {
   try {
+    await requireAdminSession(madrassaId);
+
     const supabase = await createClient();
 
     const { data: rawEventRow, error: eventError } = await supabase
@@ -280,6 +286,8 @@ export interface EventOption {
 
 export async function getEventsForAudit(madrassaId: string): Promise<ActionResult<EventOption[]>> {
   try {
+    await requireAdminSession(madrassaId);
+
     const supabase = await createClient();
     const { data, error } = await supabase
       .from('events')

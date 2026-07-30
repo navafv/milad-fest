@@ -183,9 +183,14 @@ function EventsSquadsTab() {
           pointsSingle,
           pointsGroup,
         });
-        setEvents((p) => [...p, ev as Event]);
-        setName("");
-        setCategoryId("");
+        if (ev.success && ev.data) {
+          setEvents((p) => [...p, ev.data as Event]);
+          setName("");
+          setCategoryId("");
+        } else {
+          console.error(ev.message);
+          alert(ev.message || "Failed to create event");
+        }
       } catch (e: unknown) {
         setCreateErr(e instanceof Error ? e.message : "Error");
       }
@@ -210,7 +215,14 @@ function EventsSquadsTab() {
           modalEvent.id,
           prefix.toUpperCase()
         );
-        setGenResult(`Generated ${result?.length ?? 0} subgroup(s).`);
+        
+        if (result?.success) {
+          // Check if data exists and is an array before getting length
+          const count = Array.isArray(result.data) ? result.data.length : 0;
+          setGenResult(`Generated ${count} subgroup(s).`);
+        } else {
+          setGenErr(result?.message || "Failed to generate subgroups.");
+        }
       } catch (e: unknown) {
         setGenErr(e instanceof Error ? e.message : "Error");
       }
@@ -406,9 +418,14 @@ function StageScheduleTab() {
     startStage(async () => {
       try {
         const s = await createStage(MADRASSA_ID, stageName.trim());
-        setStages((p) => [...p, s as Stage]);
-        setStageName("");
-        if (!selStageId) setSelStageId((s as Stage).id);
+        if (s?.success && s?.data) {
+          setStages((p) => [...p, s.data as Stage]);
+          setStageName("");
+          if (!selStageId) setSelStageId((s.data as Stage).id);
+        } else {
+          console.error(s?.message);
+          alert(s?.message || "Failed to create stage");
+        }
       } catch (e: unknown) {
         setStageErr(e instanceof Error ? e.message : "Error");
       }
@@ -422,15 +439,22 @@ function StageScheduleTab() {
     startSched(async () => {
       try {
         const entry = await scheduleEvent(MADRASSA_ID, eid, selStageId, startTime);
-        const stageMeta = stages.find((s) => s.id === selStageId);
-        setSchedules((p) => [
-          ...p.filter((x) => x.event_id !== eid),
-          {
-            ...(entry as ScheduleEntry),
-            eventName: eventNameInput || eid,
-            stageName: stageMeta?.name ?? selStageId,
-          },
-        ]);
+        
+        if (entry?.success && entry?.data) {
+          const selectedStageName = stages.find(s => s.id === selStageId)?.name ?? selStageId;
+
+          setSchedules((p) => [
+            ...p.filter((x) => x.event_id !== eid),
+            {
+              ...(entry.data as ScheduleEntry),
+              eventName: eventNameInput || eid,
+              stageName: selectedStageName,
+            },
+          ]);
+        } else {
+          console.error(entry?.message);
+          alert(entry?.message || "Failed to schedule event.");
+        }
         setSelEventId("");
         setEventIdInput("");
         setEventNameInput("");

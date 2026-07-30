@@ -1,70 +1,52 @@
-'use client';
+import type { ScheduleItem } from '../actions/public-actions';
+import { getPublicSchedule } from '../actions/public-actions';
 
-import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'next/navigation';
-import { getPublicSchedule, type ScheduleItem } from '../actions/public-actions';
+export const revalidate = 60;
 
-export default function PublicSchedulePage() {
-  const params = useParams();
-  const madrassaId = (params?.madrassaId as string) ?? '';
+interface PageProps {
+  params: Promise<{ madrassaId: string }>;
+}
 
-  const [schedule, setSchedule] = useState<ScheduleItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+function formatTime(iso: string) {
+  return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
 
-  useEffect(() => {
-    (async () => {
-      const result = await getPublicSchedule(madrassaId);
-      if (result.success && result.data) {
-        setSchedule(result.data);
-      } else {
-        setError(result.message ?? 'Failed to load schedule.');
-      }
-      setLoading(false);
-    })();
-  }, [madrassaId]);
-
-  const groupedByDay = useMemo(() => {
-    const groups = new Map<string, ScheduleItem[]>();
-    for (const item of schedule) {
-      const day = new Date(item.startTime).toLocaleDateString(undefined, {
-        weekday: 'long',
-        month: 'long',
-        day: 'numeric',
-      });
-      if (!groups.has(day)) groups.set(day, []);
-      groups.get(day)!.push(item);
-    }
-    return Array.from(groups.entries());
-  }, [schedule]);
-
-  function formatTime(iso: string) {
-    return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+function statusBadge(status: string) {
+  const base = 'text-xs px-2.5 py-1 rounded-full font-medium border';
+  switch (status) {
+    case 'live':
+      return `${base} bg-red-500/15 text-red-300 border-red-500/25`;
+    case 'completed':
+    case 'published':
+      return `${base} bg-emerald-500/15 text-emerald-300 border-emerald-500/25`;
+    default:
+      return `${base} bg-white/10 text-slate-300 border-white/15`;
   }
+}
 
-  function statusBadge(status: string) {
-    const base = 'text-xs px-2.5 py-1 rounded-full font-medium border';
-    switch (status) {
-      case 'live':
-        return `${base} bg-red-500/15 text-red-300 border-red-500/25`;
-      case 'completed':
-      case 'published':
-        return `${base} bg-emerald-500/15 text-emerald-300 border-emerald-500/25`;
-      default:
-        return `${base} bg-white/10 text-slate-300 border-white/15`;
-    }
+function groupByDay(schedule: ScheduleItem[]): [string, ScheduleItem[]][] {
+  const groups = new Map<string, ScheduleItem[]>();
+  for (const item of schedule) {
+    const day = new Date(item.startTime).toLocaleDateString(undefined, {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+    });
+    if (!groups.has(day)) groups.set(day, []);
+    groups.get(day)!.push(item);
   }
+  return Array.from(groups.entries());
+}
 
-  if (loading) {
-    return (
-      <div className="min-h-[60vh] flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-10 w-10 border-4 border-emerald-500/30 border-t-emerald-400 rounded-full animate-spin" />
-          <p className="text-slate-400 text-sm">Loading schedule...</p>
-        </div>
-      </div>
-    );
-  }
+export default async function PublicSchedulePage({ params }: PageProps) {
+  const { madrassaId } = await params;
+
+  const result = await getPublicSchedule(madrassaId);
+
+  const schedule = result.success && result.data ? result.data : [];
+  const error = result.success ? null : result.message ?? 'Failed to load schedule.';
+
+  const groupedByDay = groupByDay(schedule);
 
   return (
     <div className="px-6 py-10 max-w-3xl mx-auto">

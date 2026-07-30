@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import type { Database } from '@/lib/types/database'
+import { verifySession } from '@/app/(tenant)/admin/actions/auth-actions'
 
 /**
  * Server-side Supabase client.
@@ -19,11 +20,18 @@ import type { Database } from '@/lib/types/database'
  * NOTE: In Server Components `setAll` will attempt to write cookies.
  * Next.js silently ignores writes in pure render paths, so this is safe.
  * Actual writes happen through middleware and Server Actions.
+ *
+ * DEFENSE IN DEPTH: After the client is created, if a valid admin session
+ * exists (custom JWT, verified via verifySession()), its madrassa_id is
+ * pushed into the Postgres session as `app.current_madrassa_id` via
+ * set_config. RLS policies that key off current_madrassa_id() then enforce
+ * tenant isolation at the database layer, independent of any application
+ * code correctly scoping .eq("madrassa_id", ...) on every query.
  */
 export async function createClient() {
   const cookieStore = await cookies()
 
-  return createServerClient<Database>(
+  const client = createServerClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
@@ -44,4 +52,24 @@ export async function createClient() {
       },
     },
   )
+
+  // After creating `client`:
+  try {
+    const session = await verifySession()
+
+    if (session?.madrassa_id) {
+      const untypedClient = client as unknown as {
+        rpc: (fn: string, args: Record<string, unknown>) => Promise<unknown>
+      }
+      await untypedClient.rpc('set_config', {
+        setting_name: 'app.current_madrassa_id',
+        new_value: session.madrassa_id,
+        is_local: true,
+      })
+    }
+  } catch (error) {
+    console.error('createClient: failed to set tenant RLS context:', error)
+  }
+
+  return client
 }

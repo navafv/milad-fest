@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { getStudentsForIdCards } from "../actions";
 
 export default async function IdCardsPage({

@@ -2,8 +2,11 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { cookies } from 'next/headers';
+import { revalidatePath } from 'next/cache';
+import { SignJWT, jwtVerify } from 'jose';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
+import { requireAdminSession } from '@/lib/utils/tenant-auth';
 
 interface ActionResult<T = undefined> {
   success: boolean;
@@ -19,15 +22,34 @@ interface JudgeSessionPayload {
 
 const SESSION_COOKIE = 'judge_session';
 
-function encodeSession(payload: JudgeSessionPayload): string {
-  return Buffer.from(JSON.stringify(payload)).toString('base64url');
+if (!process.env.JWT_SECRET) {
+  throw new Error('JWT_SECRET environment variable is not set.');
+}
+
+const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET);
+
+async function encodeSession(payload: JudgeSessionPayload): Promise<string> {
+  return await new SignJWT({ ...payload })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
+    .setExpirationTime('12h')
+    .sign(JWT_SECRET);
 }
 
 export async function decodeJudgeSession(value: string): Promise<JudgeSessionPayload | null> {
   try {
-    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf-8'));
-    if (parsed && parsed.judgeId && parsed.madrassaId && parsed.subdomain) {
-      return parsed as JudgeSessionPayload;
+    const { payload } = await jwtVerify(value, JWT_SECRET);
+    if (
+      payload &&
+      typeof payload.judgeId === 'string' &&
+      typeof payload.madrassaId === 'string' &&
+      typeof payload.subdomain === 'string'
+    ) {
+      return {
+        judgeId: payload.judgeId,
+        madrassaId: payload.madrassaId,
+        subdomain: payload.subdomain,
+      };
     }
     return null;
   } catch {
@@ -48,6 +70,8 @@ export async function createJudgeAccount(
   pin: string
 ): Promise<ActionResult<{ userId: string }>> {
   try {
+    await requireAdminSession(madrassaId);
+
     if (!/^\d{10,15}$/.test(phone)) {
       return { success: false, message: 'Invalid phone number format.' };
     }
@@ -86,6 +110,9 @@ export async function createJudgeAccount(
     return { success: true, data: { userId } };
   } catch (error) {
     console.error('createJudgeAccount error:', error);
+    if (error instanceof Error && (error as any).status) {
+      return { success: false, message: error.message };
+    }
     return { success: false, message: 'Failed to create judge account.' };
   }
 }
@@ -127,7 +154,7 @@ export async function loginJudge(
       return { success: false, message: 'Invalid phone number or PIN.' };
     }
 
-    const sessionValue = encodeSession({
+    const sessionValue = await encodeSession({
       judgeId: user.id,
       madrassaId: user.madrassa_id,
       subdomain,
@@ -169,6 +196,14 @@ export interface AssignedEvent {
 
 export async function getAssignedEvents(judgeId: string): Promise<ActionResult<AssignedEvent[]>> {
   try {
+    const session = await getCurrentJudgeSession();
+    if (!session) {
+      return { success: false, message: 'Unauthorized: no active judge session.' };
+    }
+    if (session.judgeId !== judgeId) {
+      return { success: false, message: 'Forbidden: judge mismatch.' };
+    }
+
     const supabase = await createClient();
 
     const { data, error } = await supabase
@@ -227,6 +262,7 @@ export interface JudgeParticipant {
 }
 
 export async function getEventParticipantsByCodeLetter(
+  madrassaId: string,
   eventId: string,
   judgeId?: string
 ): Promise<ActionResult<JudgeParticipant[]>> {
@@ -238,9 +274,25 @@ export async function getEventParticipantsByCodeLetter(
       { data: squadRows },
       { data: scores }
     ] = await Promise.all([
-      supabase.from('event_participants').select('id, code_letter').eq('event_id', eventId).eq('participant_type', 'individual'),
-      supabase.from('event_squads').select('id, code_letter').eq('event_id', eventId),
-      judgeId ? supabase.from('scores').select('participant_id, score_data, total_score').eq('event_id', eventId).eq('judge_id', judgeId) : Promise.resolve({ data: [] })
+      supabase
+        .from('event_participants')
+        .select('id, code_letter')
+        .eq('event_id', eventId)
+        .eq('madrassa_id', madrassaId)
+        .eq('participant_type', 'individual'),
+      supabase
+        .from('event_squads')
+        .select('id, code_letter')
+        .eq('event_id', eventId)
+        .eq('madrassa_id', madrassaId),
+      judgeId
+        ? supabase
+            .from('scores')
+            .select('participant_id, score_data, total_score')
+            .eq('event_id', eventId)
+            .eq('madrassa_id', madrassaId)
+            .eq('judge_id', judgeId)
+        : Promise.resolve({ data: [] })
     ]);
 
     const scoreMap = new Map<string, any>();
@@ -277,15 +329,18 @@ export async function getEventParticipantsByCodeLetter(
 }
 
 export async function submitJudgeScore(
-  madrassaId: string,
   eventId: string,
-  judgeId: string,
   participantType: 'individual' | 'squad',
   participantId: string,
   scoreDataJson: Record<string, number>,
   totalScore: number
 ): Promise<ActionResult> {
   try {
+    const session = await getCurrentJudgeSession();
+    if (!session) {
+      return { success: false, message: 'Unauthorized: no active judge session.' };
+    }
+
     if (totalScore < 0) {
       return { success: false, message: 'Total score cannot be negative.' };
     }
@@ -293,9 +348,9 @@ export async function submitJudgeScore(
     const supabase = await createClient();
 
     const upsertData = {
-      madrassa_id: madrassaId,
+      madrassa_id: session.madrassaId,
       event_id: eventId,
-      judge_id: judgeId,
+      judge_id: session.judgeId,
       participant_type: participantType,
       participant_id: participantId,
       score_data: scoreDataJson,
@@ -308,6 +363,8 @@ export async function submitJudgeScore(
     });
 
     if (error) throw error;
+
+    revalidatePath('/judge/dashboard');
 
     return { success: true };
   } catch (error) {
@@ -337,9 +394,22 @@ export async function calculateMultiJudgeAverage(
       { data: squadRows },
       { data: scores }
     ] = await Promise.all([
-      supabase.from('event_participants').select('id, code_letter').eq('event_id', eventId).eq('participant_type', 'individual'),
-      supabase.from('event_squads').select('id, code_letter').eq('event_id', eventId),
-      supabase.from('scores').select('participant_id, judge_id, total_score').eq('event_id', eventId).eq('madrassa_id', madrassaId)
+      supabase
+        .from('event_participants')
+        .select('id, code_letter')
+        .eq('event_id', eventId)
+        .eq('madrassa_id', madrassaId)
+        .eq('participant_type', 'individual'),
+      supabase
+        .from('event_squads')
+        .select('id, code_letter')
+        .eq('event_id', eventId)
+        .eq('madrassa_id', madrassaId),
+      supabase
+        .from('scores')
+        .select('participant_id, judge_id, total_score')
+        .eq('event_id', eventId)
+        .eq('madrassa_id', madrassaId)
     ]);
 
     const grouped = new Map<
@@ -362,7 +432,7 @@ export async function calculateMultiJudgeAverage(
     for (const s of (scores as any[]) || []) {
       const keyInd = `individual:${s.participant_id}`;
       const keySq = `squad:${s.participant_id}`;
-      
+
       const targetKey = grouped.has(keyInd) ? keyInd : (grouped.has(keySq) ? keySq : null);
       if (targetKey && s.total_score !== null) {
         grouped.get(targetKey)!.scores.push({ judgeId: s.judge_id, totalScore: Number(s.total_score) });

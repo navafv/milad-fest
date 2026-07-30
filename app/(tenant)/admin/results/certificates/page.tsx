@@ -52,7 +52,7 @@ export default function CertificateManagerPage({
           events:event_id ( name, madrassa_id )
         `
         )
-        .eq("published", true)
+        .eq("is_published", true)
         .in("rank", [1, 2, 3])
         .eq("events.madrassa_id", madrassaId)
         .order("rank", { ascending: true });

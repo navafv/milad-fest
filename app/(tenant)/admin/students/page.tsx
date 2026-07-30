@@ -47,8 +47,13 @@ function TeamsTab() {
     startTransition(async () => {
       try {
         const team = await createTeam(MADRASSA_ID, name.trim(), color);
-        setTeams((prev) => [...prev, team]);
-        setName("");
+        
+        if (team?.success && team?.data) {
+          setTeams((prev) => [...prev, team.data as Team]);
+          setName("");
+        } else {
+          setError(team?.message || "Failed to create team.");
+        }
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : "Error");
       }
@@ -131,10 +136,16 @@ function CategoriesTab() {
     startTransition(async () => {
       try {
         const cat = await createCategory(MADRASSA_ID, name.trim(), startNum, isGeneral);
-        setCategories((prev) => [...prev, cat]);
-        setName("");
-        setStartNum(1);
-        setIsGeneral(false);
+        
+        if (cat?.success && cat?.data) {
+          setCategories((prev) => [...prev, cat.data as Category]);
+          setName("");
+          setStartNum(1);
+          setIsGeneral(false);
+        } else {
+          // Note: If your error state variable is named differently (e.g., setCatError), use that here!
+          setError(cat?.message || "Failed to create category.");
+        }
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : "Error");
       }
@@ -257,13 +268,18 @@ function StudentsTab() {
       try {
         const result = await bulkImportStudents(MADRASSA_ID, students);
         // Merge register numbers from DB result
-        setStudents(
-          students.map((s, i) => ({
-            ...s,
-            register_number_3digit: (result as any[])?.[i]?.register_number_3digit,
-          }))
-        );
-        setImported(true);
+        if (result?.success) {
+          setStudents(
+            students.map((s, i) => ({
+              ...s,
+              register_number_3digit: Array.isArray(result.data) ? result.data[i]?.register_number_3digit : undefined,
+            }))
+          );
+          setImported(true);
+        } else {
+          // Note: Use whatever your error state variable is named here, e.g., setErr or setError
+          setImportError(result?.message || "Failed to import students.");
+        }
       } catch (e: unknown) {
         setImportError(e instanceof Error ? e.message : "Import failed");
       }

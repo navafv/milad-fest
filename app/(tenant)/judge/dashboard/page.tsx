@@ -69,7 +69,7 @@ export default function JudgeDashboardPage() {
     setSelectedEvent(event);
     setView('loading');
 
-    const result = await getEventParticipantsByCodeLetter(event.id, judgeId ?? undefined);
+    const result = await getEventParticipantsByCodeLetter(event.id, judgeId || "");
     if (result.success && result.data) {
       setParticipants(result.data);
       setCurrentIndex(0);
@@ -103,10 +103,13 @@ export default function JudgeDashboardPage() {
     setIsSaving(true);
     setError(null);
 
+    if (!event || !currentParticipant) {
+      console.error("Missing event or participant data");
+      return false;
+    }
+
     const result = await submitJudgeScore(
-      '',
-      selectedEvent.id,
-      judgeId,
+      (event as any).id,
       currentParticipant.participantType,
       currentParticipant.participantId,
       scores,

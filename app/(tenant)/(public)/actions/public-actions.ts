@@ -1,5 +1,3 @@
-'use server';
-
 import { createClient } from "@/lib/supabase/server";
 
 interface ActionResult<T = undefined> {
@@ -7,6 +5,8 @@ interface ActionResult<T = undefined> {
   message?: string;
   data?: T;
 }
+
+// ── Schedule ──────────────────────────────────────────────────────────────
 
 export interface ScheduleItem {
   eventId: string;
@@ -18,6 +18,18 @@ export interface ScheduleItem {
   status: string;
 }
 
+interface ScheduleRow {
+  start_time: string;
+  end_time: string | null;
+  status: string;
+  events: {
+    id: string;
+    name: string;
+    categories: { name: string } | null;
+  } | null;
+  stages: { name: string } | null;
+}
+
 export async function getPublicSchedule(madrassaId: string): Promise<ActionResult<ScheduleItem[]>> {
   try {
     const supabase = await createClient();
@@ -27,9 +39,10 @@ export async function getPublicSchedule(madrassaId: string): Promise<ActionResul
         start_time,
         end_time,
         status,
-        events (
+        events!inner (
           id,
           name,
+          madrassa_id,
           categories (
             name
           )
@@ -39,19 +52,24 @@ export async function getPublicSchedule(madrassaId: string): Promise<ActionResul
         )
       `)
       .eq('madrassa_id', madrassaId)
+      .eq('events.madrassa_id', madrassaId)
       .order('start_time', { ascending: true });
 
     if (error) throw error;
 
-    const items: ScheduleItem[] = ((data as any[]) || []).map((r: any) => ({
-      eventId: r.events?.id,
-      eventName: r.events?.name,
-      category: r.events?.categories?.name || null,
-      stageName: r.stages?.name || null,
-      startTime: new Date(r.start_time).toISOString(),
-      endTime: r.end_time ? new Date(r.end_time).toISOString() : null,
-      status: r.status,
-    }));
+    const rows = (data as unknown as ScheduleRow[]) || [];
+
+    const items: ScheduleItem[] = rows
+      .filter((r) => r.events !== null)
+      .map((r) => ({
+        eventId: r.events!.id,
+        eventName: r.events!.name,
+        category: r.events!.categories?.name || null,
+        stageName: r.stages?.name || null,
+        startTime: new Date(r.start_time).toISOString(),
+        endTime: r.end_time ? new Date(r.end_time).toISOString() : null,
+        status: r.status,
+      }));
 
     return { success: true, data: items };
   } catch (error) {
@@ -59,6 +77,8 @@ export async function getPublicSchedule(madrassaId: string): Promise<ActionResul
     return { success: false, message: 'Failed to load schedule.' };
   }
 }
+
+// ── Published Results ────────────────────────────────────────────────────
 
 export interface WinnerEntry {
   participantId: string;
@@ -75,6 +95,22 @@ export interface PublishedEventResult {
   category: string | null;
   publishedAt: string | null;
   winners: WinnerEntry[];
+}
+
+interface ResultRow {
+  event_id: string;
+  published_at: string | null;
+  participant_id: string;
+  participant_type: 'individual' | 'squad';
+  code_letter: string;
+  final_rank: number;
+  points_awarded: number;
+  events: {
+    name: string;
+    categories: { name: string } | null;
+  } | null;
+  students: { name: string } | null;
+  event_subgroups: { team_id: string | null } | null;
 }
 
 export async function getPublishedResults(
@@ -112,10 +148,11 @@ export async function getPublishedResults(
 
     if (error) throw error;
 
+    const rows = (data as unknown as ResultRow[]) || [];
+
     const grouped = new Map<string, PublishedEventResult>();
 
-    // We cast to any[] here so TypeScript stops worrying about the complex joins
-    for (const row of (data as any[]) || []) {
+    for (const row of rows) {
       if (!grouped.has(row.event_id)) {
         grouped.set(row.event_id, {
           eventId: row.event_id,
@@ -126,15 +163,16 @@ export async function getPublishedResults(
         });
       }
 
-      let displayName = row.participant_type === 'individual' 
-        ? row.students?.name 
-        : `Squad ${row.code_letter}`;
+      const displayName =
+        row.participant_type === 'individual'
+          ? row.students?.name ?? null
+          : `Squad ${row.code_letter}`;
 
       grouped.get(row.event_id)!.winners.push({
         participantId: row.participant_id,
-        participantType: row.participant_type as 'individual' | 'squad',
+        participantType: row.participant_type,
         codeLetter: row.code_letter,
-        displayName: displayName || null,
+        displayName,
         finalRank: Number(row.final_rank),
         pointsAwarded: Number(row.points_awarded),
       });
@@ -154,11 +192,23 @@ export async function getPublishedResults(
   }
 }
 
+// ── Team Leaderboard ─────────────────────────────────────────────────────
+
 export interface TeamLeaderboardEntry {
   teamId: string;
   teamName: string;
   totalPoints: number;
   rank: number;
+}
+
+interface TeamRow {
+  id: string;
+  name: string;
+}
+
+interface TeamPointsRow {
+  team_id: string;
+  points_awarded: number;
 }
 
 export async function getTeamLeaderboard(
@@ -167,33 +217,36 @@ export async function getTeamLeaderboard(
   try {
     const supabase = await createClient();
 
-    const { data: teams, error: teamsError } = await supabase
-      .from('teams')
-      .select('id, name')
-      .eq('madrassa_id', madrassaId);
+    const [{ data: teamsData, error: teamsError }, { data: resultsData, error: resultsError }] =
+      await Promise.all([
+        supabase.from('teams').select('id, name').eq('madrassa_id', madrassaId),
+        supabase
+          .from('results')
+          .select('team_id, points_awarded')
+          .eq('madrassa_id', madrassaId)
+          .eq('is_published', true)
+          .not('team_id', 'is', null),
+      ]);
 
     if (teamsError) throw teamsError;
-
-    const { data: results, error: resultsError } = await supabase
-      .from('results')
-      .select('team_id, points_awarded')
-      .eq('madrassa_id', madrassaId)
-      .eq('is_published', true)
-      .not('team_id', 'is', null);
-
     if (resultsError) throw resultsError;
 
+    const teams = (teamsData as TeamRow[]) || [];
+    const results = (resultsData as TeamPointsRow[]) || [];
+
     const teamPoints = new Map<string, number>();
-    for (const row of (results as any[]) || []) {
+    for (const row of results) {
       const current = teamPoints.get(row.team_id) || 0;
       teamPoints.set(row.team_id, current + (Number(row.points_awarded) || 0));
     }
 
-    const scoredTeams = ((teams as any[]) || []).map((t: any) => ({
-      teamId: t.id,
-      teamName: t.name,
-      totalPoints: teamPoints.get(t.id) || 0
-    })).sort((a, b) => b.totalPoints - a.totalPoints || a.teamName.localeCompare(b.teamName));
+    const scoredTeams = teams
+      .map((t) => ({
+        teamId: t.id,
+        teamName: t.name,
+        totalPoints: teamPoints.get(t.id) || 0,
+      }))
+      .sort((a, b) => b.totalPoints - a.totalPoints || a.teamName.localeCompare(b.teamName));
 
     let rank = 0;
     let prevPoints: number | null = null;

@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { requireAdminSession } from "@/lib/utils/tenant-auth";
 
 export interface StudentIdCardData {
   id: string;
@@ -23,6 +24,8 @@ export interface ResultExportRow {
 export async function getStudentsForIdCards(
   madrassaId: string
 ): Promise<StudentIdCardData[]> {
+  await requireAdminSession(madrassaId);
+
   const supabase = await createClient();
 
   const { data: students, error } = await supabase
@@ -74,6 +77,8 @@ export async function getStudentsForIdCards(
 export async function getResultsForExport(
   madrassaId: string
 ): Promise<ResultExportRow[]> {
+  await requireAdminSession(madrassaId);
+
   const supabase = await createClient();
 
   const { data: results, error } = await supabase
@@ -86,7 +91,8 @@ export async function getResultsForExport(
       events:event_id ( name, madrassa_id )
     `
     )
-    .eq("published", true)
+    .eq("madrassa_id", madrassaId)
+    .eq("is_published", true)
     .eq("events.madrassa_id", madrassaId)
     .order("rank", { ascending: true });
 

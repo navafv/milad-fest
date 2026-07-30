@@ -1,65 +1,51 @@
-'use client';
+export const dynamic = "force-dynamic";
+export const dynamicParams = true;
 
-import { useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
-import { getPublishedResults, type PublishedEventResult } from '../actions/public-actions';
+import type { PublishedEventResult } from '../actions/public-actions';
+import { getPublishedResults } from '../actions/public-actions';
 
-export default function PublicResultsPage() {
-  const params = useParams();
-  const madrassaId = (params?.madrassaId as string) ?? '';
+// Add this so Next.js doesn't crash trying to prerender dynamic route parameters during build
+export function generateStaticParams() {
+  return [{ madrassaId: "_" }];
+}
 
-  const [results, setResults] = useState<PublishedEventResult[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+interface PageProps {
+  params: Promise<{ madrassaId: string }>;
+}
 
-  useEffect(() => {
-    (async () => {
-      const result = await getPublishedResults(madrassaId);
-      if (result.success && result.data) {
-        setResults(result.data);
-      } else {
-        setError(result.message ?? 'Failed to load results.');
-      }
-      setLoading(false);
-    })();
-  }, [madrassaId]);
-
-  function medalStyle(rank: number) {
-    switch (rank) {
-      case 1:
-        return 'bg-yellow-500/15 text-yellow-300 border-yellow-400/30';
-      case 2:
-        return 'bg-slate-400/15 text-slate-200 border-slate-400/30';
-      case 3:
-        return 'bg-orange-500/15 text-orange-300 border-orange-500/30';
-      default:
-        return 'bg-white/5 text-slate-400 border-white/10';
-    }
+function medalStyle(rank: number) {
+  switch (rank) {
+    case 1:
+      return 'bg-yellow-500/15 text-yellow-300 border-yellow-400/30';
+    case 2:
+      return 'bg-slate-400/15 text-slate-200 border-slate-400/30';
+    case 3:
+      return 'bg-orange-500/15 text-orange-300 border-orange-500/30';
+    default:
+      return 'bg-white/5 text-slate-400 border-white/10';
   }
+}
 
-  function medalLabel(rank: number) {
-    switch (rank) {
-      case 1:
-        return '1st';
-      case 2:
-        return '2nd';
-      case 3:
-        return '3rd';
-      default:
-        return `${rank}th`;
-    }
+function medalLabel(rank: number) {
+  switch (rank) {
+    case 1:
+      return '1st';
+    case 2:
+      return '2nd';
+    case 3:
+      return '3rd';
+    default:
+      return `${rank}th`;
   }
+}
 
-  if (loading) {
-    return (
-      <div className="min-h-[60vh] flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-10 w-10 border-4 border-emerald-500/30 border-t-emerald-400 rounded-full animate-spin" />
-          <p className="text-slate-400 text-sm">Loading results...</p>
-        </div>
-      </div>
-    );
-  }
+export default async function PublicResultsPage({ params }: PageProps) {
+  const { madrassaId } = await params;
+
+  const result = await getPublishedResults(madrassaId);
+
+  const results: PublishedEventResult[] = result.success && result.data ? result.data : [];
+  const error = result.success ? null : result.message ?? 'Failed to load results.';
 
   return (
     <div className="px-6 py-10 max-w-3xl mx-auto">

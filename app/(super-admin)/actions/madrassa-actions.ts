@@ -1,6 +1,8 @@
 "use server";
 
 import { createClient } from "@supabase/supabase-js";
+import { cookies } from "next/headers";
+import { jwtVerify } from "jose";
 import bcrypt from "bcryptjs";
 import { revalidatePath } from "next/cache";
 
@@ -8,6 +10,58 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const SUPER_ADMIN_SESSION_COOKIE = "super_admin_session";
+
+if (!process.env.SUPER_ADMIN_JWT_SECRET) {
+  throw new Error("SUPER_ADMIN_JWT_SECRET environment variable is not set.");
+}
+
+const SUPER_ADMIN_JWT_SECRET = new TextEncoder().encode(
+  process.env.SUPER_ADMIN_JWT_SECRET
+);
+
+interface SuperAdminSessionPayload {
+  superAdminId: string;
+  role: "super_admin";
+}
+
+/**
+ * DUMMY / BASIC IMPLEMENTATION.
+ *
+ * This verifies a signed JWT stored in an httpOnly cookie and confirms the
+ * payload carries a "super_admin" role claim. It intentionally does NOT
+ * hit the database on every call (no session-revocation / DB-backed check).
+ *
+ * Replace this with your real super-admin auth module (e.g. an equivalent
+ * of `verifySession` from the tenant-admin auth actions) as soon as one
+ * exists. Wire it up the same way `requireAdminSession` wraps `verifySession`
+ * elsewhere in this codebase.
+ */
+async function verifySuperAdminSession(): Promise<SuperAdminSessionPayload | null> {
+  try {
+    const cookieStore = await cookies();
+    const token = cookieStore.get(SUPER_ADMIN_SESSION_COOKIE)?.value;
+    if (!token) return null;
+
+    const { payload } = await jwtVerify(token, SUPER_ADMIN_JWT_SECRET);
+
+    if (
+      payload &&
+      typeof payload.superAdminId === "string" &&
+      payload.role === "super_admin"
+    ) {
+      return {
+        superAdminId: payload.superAdminId,
+        role: "super_admin",
+      };
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 export type MadrassaRow = {
   id: string;
@@ -23,6 +77,11 @@ export type ActionResult =
   | { success: false; error: string };
 
 export async function createMadrassa(formData: FormData): Promise<ActionResult> {
+  const session = await verifySuperAdminSession();
+  if (!session) {
+    return { success: false, error: "Unauthorized" };
+  }
+
   const name = (formData.get("name") as string)?.trim();
   const register_number = (formData.get("register_number") as string)?.trim();
   const password = (formData.get("password") as string)?.trim();
@@ -51,7 +110,11 @@ export async function createMadrassa(formData: FormData): Promise<ActionResult> 
     .limit(1);
 
   if (lookupError) {
-    return { success: false, error: "Database error during validation." };
+    console.error("createMadrassa lookup error:", lookupError);
+    return {
+      success: false,
+      error: "Something went wrong while managing the Madrassa. Please try again.",
+    };
   }
 
   if (existing && existing.length > 0) {
@@ -72,7 +135,11 @@ export async function createMadrassa(formData: FormData): Promise<ActionResult> 
   });
 
   if (insertError) {
-    return { success: false, error: insertError.message };
+    console.error("createMadrassa insert error:", insertError);
+    return {
+      success: false,
+      error: "Something went wrong while managing the Madrassa. Please try again.",
+    };
   }
 
   revalidatePath("/dashboard");
@@ -83,6 +150,11 @@ export async function toggleMadrassaStatus(
   id: string,
   currentStatus: boolean
 ): Promise<ActionResult> {
+  const session = await verifySuperAdminSession();
+  if (!session) {
+    return { success: false, error: "Unauthorized" };
+  }
+
   if (!id) {
     return { success: false, error: "Invalid Madrassa ID." };
   }
@@ -93,7 +165,11 @@ export async function toggleMadrassaStatus(
     .eq("id", id);
 
   if (error) {
-    return { success: false, error: error.message };
+    console.error("toggleMadrassaStatus error:", error);
+    return {
+      success: false,
+      error: "Something went wrong while managing the Madrassa. Please try again.",
+    };
   }
 
   revalidatePath("/dashboard");
@@ -107,13 +183,22 @@ export async function getAllMadrassas(): Promise<{
   data: MadrassaRow[] | null;
   error: string | null;
 }> {
+  const session = await verifySuperAdminSession();
+  if (!session) {
+    return { data: null, error: "Unauthorized" };
+  }
+
   const { data, error } = await supabase
     .from("madrassas")
     .select("id, name, register_number, subdomain, is_active, created_at")
     .order("created_at", { ascending: false });
 
   if (error) {
-    return { data: null, error: error.message };
+    console.error("getAllMadrassas error:", error);
+    return {
+      data: null,
+      error: "Something went wrong while managing the Madrassa. Please try again.",
+    };
   }
 
   return { data: data as MadrassaRow[], error: null };
