@@ -10,6 +10,110 @@ interface ActionResult<T = undefined> {
   data?: T;
 }
 
+// ── Get Events ─────────────────────────────────────────────────────────────
+// Fetches all events for the authenticated admin's tenant. Used to populate
+// the Events & Squads table on page load — previously the page only ever
+// showed events created during the current browser session.
+
+export async function getEvents(): Promise<ActionResult<any[]>> {
+  try {
+    const session = await verifySession();
+    if (!session) return { success: false, message: "Unauthorized" };
+    const madrassaId = session.madrassa_id;
+
+    const supabase = await createClient();
+
+    const { data, error } = await supabase
+      .from("events")
+      .select(
+        "id, name, gender_rule, is_group_event, group_strength, points_single, points_group, is_general, category_id"
+      )
+      .eq("madrassa_id", madrassaId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("getEvents error:", error);
+      return { success: false, message: "Failed to load events." };
+    }
+
+    return { success: true, data: data ?? [] };
+  } catch (error) {
+    console.error("getEvents error:", error);
+    return { success: false, message: "Failed to load events." };
+  }
+}
+
+// ── Get Stages ─────────────────────────────────────────────────────────────
+
+export async function getStages(): Promise<ActionResult<any[]>> {
+  try {
+    const session = await verifySession();
+    if (!session) return { success: false, message: "Unauthorized" };
+    const madrassaId = session.madrassa_id;
+
+    const supabase = await createClient();
+
+    const { data, error } = await supabase
+      .from("stages")
+      .select("id, name")
+      .eq("madrassa_id", madrassaId)
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      console.error("getStages error:", error);
+      return { success: false, message: "Failed to load stages." };
+    }
+
+    return { success: true, data: data ?? [] };
+  } catch (error) {
+    console.error("getStages error:", error);
+    return { success: false, message: "Failed to load stages." };
+  }
+}
+
+// ── Get Schedules ──────────────────────────────────────────────────────────
+// Returns event_schedules joined with the event name and stage name so the
+// Schedule Board can render immediately on load without extra client-side
+// lookups.
+
+export async function getSchedules(): Promise<ActionResult<any[]>> {
+  try {
+    const session = await verifySession();
+    if (!session) return { success: false, message: "Unauthorized" };
+    const madrassaId = session.madrassa_id;
+
+    const supabase = await createClient();
+
+    const { data, error } = await supabase
+      .from("event_schedules")
+      .select(
+        "id, event_id, stage_id, start_time, status, events(name), stages(name)"
+      )
+      .eq("madrassa_id", madrassaId)
+      .order("start_time", { ascending: true });
+
+    if (error) {
+      console.error("getSchedules error:", error);
+      return { success: false, message: "Failed to load schedules." };
+    }
+
+    const normalized = (data ?? []).map((row: any) => ({
+      id: row.id,
+      event_id: row.event_id,
+      stage_id: row.stage_id,
+      start_time: row.start_time,
+      status: row.status,
+      eventName: row.events?.name ?? row.event_id,
+      stageName: row.stages?.name ?? row.stage_id,
+    }));
+
+    return { success: true, data: normalized };
+  } catch (error) {
+    console.error("getSchedules error:", error);
+    return { success: false, message: "Failed to load schedules." };
+  }
+}
+
 // ── Create Event ───────────────────────────────────────────────────────────
 
 export async function createEvent({
@@ -64,6 +168,85 @@ export async function createEvent({
   } catch (error) {
     console.error("createEvent error:", error);
     return { success: false, message: "Failed to create event." };
+  }
+}
+
+// ── Delete Event ───────────────────────────────────────────────────────────
+// Deletes an event and everything downstream of it that references
+// event_id, scoped to the authenticated admin's tenant throughout. Child
+// rows are removed first so this doesn't trip foreign-key constraints,
+// regardless of whether ON DELETE CASCADE is configured in the DB.
+
+export async function deleteEvent(eventId: string): Promise<ActionResult> {
+  try {
+    const session = await verifySession();
+    if (!session) return { success: false, message: "Unauthorized" };
+    const madrassaId = session.madrassa_id;
+
+    const supabase = await createClient();
+
+    // Confirm the event actually belongs to this tenant before touching
+    // anything, rather than relying on the eq() filters below alone.
+    const { data: event, error: eventCheckError } = await supabase
+      .from("events")
+      .select("id")
+      .eq("id", eventId)
+      .eq("madrassa_id", madrassaId)
+      .maybeSingle();
+
+    if (eventCheckError) {
+      console.error("deleteEvent ownership check error:", eventCheckError);
+      return { success: false, message: "Failed to delete event." };
+    }
+    if (!event) {
+      return { success: false, message: "Event not found." };
+    }
+
+    const childTables = [
+      "scores",
+      "rank_overrides",
+      "results",
+      "event_judges",
+      "event_participants",
+      "event_squads",
+      "event_subgroups",
+      "event_registrations",
+      "event_schedules",
+    ] as const;
+
+    for (const table of childTables) {
+      const { error: childError } = await supabase
+        .from(table)
+        .delete()
+        .eq("event_id", eventId)
+        .eq("madrassa_id", madrassaId);
+
+      // Some of these tables may not exist in every deployment's schema —
+      // ignore "relation does not exist" style errors (Postgres code 42P01)
+      // but surface anything else, since a real failure here would leave
+      // orphaned child rows behind.
+      if (childError && (childError as any).code !== "42P01") {
+        console.error(`deleteEvent cleanup error (${table}):`, childError);
+        return { success: false, message: "Failed to delete related event data." };
+      }
+    }
+
+    const { error: deleteError } = await supabase
+      .from("events")
+      .delete()
+      .eq("id", eventId)
+      .eq("madrassa_id", madrassaId);
+
+    if (deleteError) {
+      console.error("deleteEvent error:", deleteError);
+      return { success: false, message: "Failed to delete event." };
+    }
+
+    revalidatePath("/admin/events");
+    return { success: true };
+  } catch (error) {
+    console.error("deleteEvent error:", error);
+    return { success: false, message: "Failed to delete event." };
   }
 }
 
@@ -223,6 +406,63 @@ export async function createStage(
   } catch (error) {
     console.error("createStage error:", error);
     return { success: false, message: "Failed to create stage." };
+  }
+}
+
+// ── Delete Stage ───────────────────────────────────────────────────────────
+// Removes any schedule entries pinned to this stage first (so events aren't
+// left pointing at a deleted stage), then deletes the stage itself.
+
+export async function deleteStage(stageId: string): Promise<ActionResult> {
+  try {
+    const session = await verifySession();
+    if (!session) return { success: false, message: "Unauthorized" };
+    const madrassaId = session.madrassa_id;
+
+    const supabase = await createClient();
+
+    const { data: stage, error: stageCheckError } = await supabase
+      .from("stages")
+      .select("id")
+      .eq("id", stageId)
+      .eq("madrassa_id", madrassaId)
+      .maybeSingle();
+
+    if (stageCheckError) {
+      console.error("deleteStage ownership check error:", stageCheckError);
+      return { success: false, message: "Failed to delete stage." };
+    }
+    if (!stage) {
+      return { success: false, message: "Stage not found." };
+    }
+
+    const { error: scheduleError } = await supabase
+      .from("event_schedules")
+      .delete()
+      .eq("stage_id", stageId)
+      .eq("madrassa_id", madrassaId);
+
+    if (scheduleError) {
+      console.error("deleteStage schedule cleanup error:", scheduleError);
+      return { success: false, message: "Failed to remove schedule entries for this stage." };
+    }
+
+    const { error: deleteError } = await supabase
+      .from("stages")
+      .delete()
+      .eq("id", stageId)
+      .eq("madrassa_id", madrassaId);
+
+    if (deleteError) {
+      console.error("deleteStage error:", deleteError);
+      return { success: false, message: "Failed to delete stage." };
+    }
+
+    revalidatePath("/admin/events");
+    return { success: true };
+  } catch (error) {
+    console.error("deleteStage error:", error);
+    return { success: false, message: "Failed to delete stage." };
   }
 }
 

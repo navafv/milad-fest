@@ -1,11 +1,17 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
+import { Trash2, Loader2 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  getEvents,
+  getStages,
+  getSchedules,
   createEvent,
+  deleteEvent,
   generateSubgroupsAndCodeLetters,
   createStage,
+  deleteStage,
   scheduleEvent,
 } from "../actions/event-actions";
 
@@ -79,7 +85,7 @@ function Btn({
   children,
   variant = "primary",
   ...props
-}: { variant?: "primary" | "emerald" | "ghost" } & React.ButtonHTMLAttributes<HTMLButtonElement> & {
+}: { variant?: "primary" | "emerald" | "ghost" | "danger" } & React.ButtonHTMLAttributes<HTMLButtonElement> & {
     children: React.ReactNode;
   }) {
   const base =
@@ -88,10 +94,35 @@ function Btn({
     primary: "bg-indigo-600 text-white hover:bg-indigo-500",
     emerald: "bg-emerald-600 text-white hover:bg-emerald-500",
     ghost: "border border-zinc-700 text-zinc-300 hover:bg-zinc-800",
+    danger: "bg-red-600 text-white hover:bg-red-500",
   };
   return (
     <button {...props} className={`${base} ${styles[variant]}`}>
       {children}
+    </button>
+  );
+}
+
+function IconBtn({
+  onClick,
+  disabled,
+  label,
+  loading,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  label: string;
+  loading?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+      className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 text-zinc-400 transition-colors hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
+    >
+      {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
     </button>
   );
 }
@@ -132,6 +163,25 @@ function EmptyState({
       </div>
       <p className="text-sm font-medium text-zinc-300">{title}</p>
       <p className="text-xs text-zinc-500 mt-1 max-w-xs">{description}</p>
+    </div>
+  );
+}
+
+function TableSkeleton({ rows = 3, cols = 6 }: { rows?: number; cols?: number }) {
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
+      <div className="px-4 py-3 border-b border-zinc-800">
+        <div className="h-4 w-24 rounded bg-zinc-800 animate-pulse" />
+      </div>
+      <div className="divide-y divide-zinc-800">
+        {Array.from({ length: rows }).map((_, r) => (
+          <div key={r} className="flex gap-4 px-4 py-4">
+            {Array.from({ length: cols }).map((_, c) => (
+              <div key={c} className="h-3.5 flex-1 rounded bg-zinc-800/80 animate-pulse" />
+            ))}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -189,10 +239,59 @@ function Modal({
   );
 }
 
+// ── Delete Confirmation Modal ────────────────────────────────────────────
+
+function ConfirmDeleteModal({
+  open,
+  onClose,
+  onConfirm,
+  title,
+  description,
+  isPending,
+  error,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  title: string;
+  description: string;
+  isPending: boolean;
+  error: string;
+}) {
+  return (
+    <Modal open={open} onClose={onClose} title={title}>
+      <div className="flex gap-3">
+        <div className="h-10 w-10 shrink-0 rounded-full bg-red-500/10 flex items-center justify-center">
+          <Trash2 className="h-5 w-5 text-red-400" />
+        </div>
+        <p className="text-sm text-zinc-400">{description}</p>
+      </div>
+      <ErrMsg msg={error} />
+      <div className="flex gap-3 pt-1">
+        <Btn variant="danger" onClick={onConfirm} disabled={isPending}>
+          {isPending ? "Deleting…" : "Delete"}
+        </Btn>
+        <Btn variant="ghost" onClick={onClose} disabled={isPending}>
+          Cancel
+        </Btn>
+      </div>
+    </Modal>
+  );
+}
+
 // ── Events & Squads Tab ────────────────────────────────────────────────────
 
-function EventsSquadsTab() {
-  const [events, setEvents] = useState<Event[]>([]);
+function EventsSquadsTab({
+  events,
+  setEvents,
+  loading,
+  loadError,
+}: {
+  events: Event[];
+  setEvents: React.Dispatch<React.SetStateAction<Event[]>>;
+  loading: boolean;
+  loadError: string;
+}) {
   const [toast, setToast] = useState<string | null>(null);
 
   // Create event form state
@@ -213,6 +312,11 @@ function EventsSquadsTab() {
   const [genResult, setGenResult] = useState("");
   const [genErr, setGenErr] = useState("");
   const [isPendingGen, startGen] = useTransition();
+
+  // Delete modal state
+  const [deleteTarget, setDeleteTarget] = useState<Event | null>(null);
+  const [deleteErr, setDeleteErr] = useState("");
+  const [isPendingDelete, startDelete] = useTransition();
 
   useEffect(() => {
     if (!toast) return;
@@ -236,7 +340,7 @@ function EventsSquadsTab() {
           pointsGroup,
         });
         if (ev.success && ev.data) {
-          setEvents((p) => [...p, ev.data as Event]);
+          setEvents((p) => [ev.data as Event, ...p]);
           setName("");
           setCategoryId("");
           setToast(`"${(ev.data as Event).name}" created.`);
@@ -275,6 +379,29 @@ function EventsSquadsTab() {
         }
       } catch (e: unknown) {
         setGenErr(e instanceof Error ? e.message : "Error");
+      }
+    });
+  }
+
+  function openDeleteModal(ev: Event) {
+    setDeleteTarget(ev);
+    setDeleteErr("");
+  }
+
+  function handleDeleteEvent() {
+    if (!deleteTarget) return;
+    setDeleteErr("");
+    startDelete(async () => {
+      const result = await deleteEvent(deleteTarget.id);
+      if (result.success) {
+        // Optimistically drop it from local state rather than re-fetching —
+        // avoids a network round trip just to reflect a delete we already
+        // know succeeded.
+        setEvents((p) => p.filter((e) => e.id !== deleteTarget.id));
+        setToast(`"${deleteTarget.name}" deleted.`);
+        setDeleteTarget(null);
+      } else {
+        setDeleteErr(result.message || "Failed to delete event.");
       }
     });
   }
@@ -379,7 +506,13 @@ function EventsSquadsTab() {
       </div>
 
       {/* Events table */}
-      {events.length > 0 ? (
+      {loading ? (
+        <TableSkeleton />
+      ) : loadError ? (
+        <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
+          <p className="text-sm text-red-400">{loadError}</p>
+        </div>
+      ) : events.length > 0 ? (
         <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
           <div className="px-4 py-3 border-b border-zinc-800">
             <span className="text-sm font-medium text-zinc-300">{events.length} Events</span>
@@ -408,9 +541,12 @@ function EventsSquadsTab() {
                       {ev.is_group_event ? ev.points_group : ev.points_single}
                     </td>
                     <td className="px-4 py-3">
-                      <Btn variant="ghost" onClick={() => openModal(ev)}>
-                        Generate Squads &amp; Codes
-                      </Btn>
+                      <div className="flex items-center gap-2">
+                        <Btn variant="ghost" onClick={() => openModal(ev)}>
+                          Generate Squads &amp; Codes
+                        </Btn>
+                        <IconBtn label={`Delete "${ev.name}"`} onClick={() => openDeleteModal(ev)} />
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -451,6 +587,17 @@ function EventsSquadsTab() {
         </div>
       </Modal>
 
+      {/* Delete confirmation modal */}
+      <ConfirmDeleteModal
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDeleteEvent}
+        title="Delete Event?"
+        description={`This permanently deletes "${deleteTarget?.name}" along with all its registrations, squads, code letters, schedules, scores, and results. This cannot be undone.`}
+        isPending={isPendingDelete}
+        error={deleteErr}
+      />
+
       {toast && (
         <div
           role="status"
@@ -467,23 +614,37 @@ function EventsSquadsTab() {
 
 // ── Stage Schedule Tab ─────────────────────────────────────────────────────
 
-function StageScheduleTab() {
-  const [stages, setStages] = useState<Stage[]>([]);
+function StageScheduleTab({
+  events,
+  stages,
+  setStages,
+  schedules,
+  setSchedules,
+  loading,
+  loadError,
+}: {
+  events: Event[];
+  stages: Stage[];
+  setStages: React.Dispatch<React.SetStateAction<Stage[]>>;
+  schedules: ScheduleEntry[];
+  setSchedules: React.Dispatch<React.SetStateAction<ScheduleEntry[]>>;
+  loading: boolean;
+  loadError: string;
+}) {
   const [stageName, setStageName] = useState("");
   const [stageErr, setStageErr] = useState("");
   const [isPendingStage, startStage] = useTransition();
 
-  const [schedules, setSchedules] = useState<ScheduleEntry[]>([]);
   const [selEventId, setSelEventId] = useState("");
   const [selStageId, setSelStageId] = useState("");
   const [startTime, setStartTime] = useState("");
   const [schedErr, setSchedErr] = useState("");
   const [isPendingSched, startSched] = useTransition();
 
-  // Local events list — user can type event ID directly for now
-  // In production wire this to a fetch or shared state
-  const [eventIdInput, setEventIdInput] = useState("");
-  const [eventNameInput, setEventNameInput] = useState("");
+  // Delete-stage modal state
+  const [deleteTarget, setDeleteTarget] = useState<Stage | null>(null);
+  const [deleteErr, setDeleteErr] = useState("");
+  const [isPendingDelete, startDelete] = useTransition();
 
   function handleAddStage() {
     if (!stageName.trim()) { setStageErr("Name required"); return; }
@@ -504,22 +665,43 @@ function StageScheduleTab() {
     });
   }
 
+  function openDeleteModal(stage: Stage) {
+    setDeleteTarget(stage);
+    setDeleteErr("");
+  }
+
+  function handleDeleteStage() {
+    if (!deleteTarget) return;
+    setDeleteErr("");
+    startDelete(async () => {
+      const result = await deleteStage(deleteTarget.id);
+      if (result.success) {
+        setStages((p) => p.filter((s) => s.id !== deleteTarget.id));
+        setSchedules((p) => p.filter((s) => s.stage_id !== deleteTarget.id));
+        if (selStageId === deleteTarget.id) setSelStageId("");
+        setDeleteTarget(null);
+      } else {
+        setDeleteErr(result.message || "Failed to delete stage.");
+      }
+    });
+  }
+
   function handleSchedule() {
-    const eid = selEventId || eventIdInput;
-    if (!eid || !selStageId || !startTime) { setSchedErr("All fields required"); return; }
+    if (!selEventId || !selStageId || !startTime) { setSchedErr("All fields required"); return; }
     setSchedErr("");
     startSched(async () => {
       try {
-        const entry = await scheduleEvent(eid, selStageId, startTime);
+        const entry = await scheduleEvent(selEventId, selStageId, startTime);
 
         if (entry?.success && entry?.data) {
-          const selectedStageName = stages.find(s => s.id === selStageId)?.name ?? selStageId;
+          const selectedStageName = stages.find((s) => s.id === selStageId)?.name ?? selStageId;
+          const selectedEventName = events.find((e) => e.id === selEventId)?.name ?? selEventId;
 
           setSchedules((p) => [
-            ...p.filter((x) => x.event_id !== eid),
+            ...p.filter((x) => x.event_id !== selEventId),
             {
               ...(entry.data as ScheduleEntry),
-              eventName: eventNameInput || eid,
+              eventName: selectedEventName,
               stageName: selectedStageName,
             },
           ]);
@@ -527,8 +709,6 @@ function StageScheduleTab() {
           setSchedErr(entry?.message || "Failed to schedule event.");
         }
         setSelEventId("");
-        setEventIdInput("");
-        setEventNameInput("");
         setStartTime("");
       } catch (e: unknown) {
         setSchedErr(e instanceof Error ? e.message : "Error");
@@ -564,33 +744,56 @@ function StageScheduleTab() {
           </Btn>
         </div>
         <ErrMsg msg={stageErr} />
-        {stages.length > 0 && (
+
+        {loading ? (
+          <div className="flex gap-2 pt-1">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="h-7 w-24 rounded-full bg-zinc-800 animate-pulse" />
+            ))}
+          </div>
+        ) : loadError ? (
+          <p className="text-sm text-red-400">{loadError}</p>
+        ) : stages.length > 0 ? (
           <div className="flex flex-wrap gap-2 pt-1">
             {stages.map((s) => (
-              <span key={s.id} className="rounded-full border border-zinc-700 bg-zinc-800 px-3 py-1 text-xs text-zinc-300">
+              <span
+                key={s.id}
+                className="inline-flex items-center gap-2 rounded-full border border-zinc-700 bg-zinc-800 pl-3 pr-1.5 py-1 text-xs text-zinc-300"
+              >
                 {s.name}
+                <button
+                  onClick={() => openDeleteModal(s)}
+                  aria-label={`Delete stage "${s.name}"`}
+                  title={`Delete stage "${s.name}"`}
+                  className="inline-flex h-5 w-5 items-center justify-center rounded-full text-zinc-500 hover:bg-red-500/10 hover:text-red-400 transition-colors"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
               </span>
             ))}
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Assign event to stage */}
       <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6 space-y-4">
         <h2 className="text-lg font-semibold text-white">Assign Event to Stage</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Input
-            label="Event ID"
-            value={eventIdInput}
-            onChange={(e) => setEventIdInput(e.target.value)}
-            placeholder="UUID from Events tab"
-          />
-          <Input
-            label="Event Display Name (optional)"
-            value={eventNameInput}
-            onChange={(e) => setEventNameInput(e.target.value)}
-            placeholder="e.g. Quran Recitation"
-          />
+          <div className="flex flex-col gap-1 sm:col-span-2">
+            <label className="text-xs font-medium text-zinc-400">Event</label>
+            <select
+              value={selEventId}
+              onChange={(e) => setSelEventId(e.target.value)}
+              className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="">
+                {events.length === 0 ? "No events created yet" : "Select event…"}
+              </option>
+              {events.map((ev) => (
+                <option key={ev.id} value={ev.id}>{ev.name}</option>
+              ))}
+            </select>
+          </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-zinc-400">Stage</label>
             <select
@@ -618,13 +821,15 @@ function StageScheduleTab() {
       </div>
 
       {/* Schedule board */}
-      {schedules.length > 0 ? (
+      {loading ? (
+        <TableSkeleton rows={2} cols={3} />
+      ) : schedules.length > 0 ? (
         <div className="space-y-4">
           <h2 className="text-base font-semibold text-white">Schedule Board</h2>
-          {Object.entries(byStage).map(([stageName, entries]) => (
-            <div key={stageName} className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
+          {Object.entries(byStage).map(([stageLabel, entries]) => (
+            <div key={stageLabel} className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
               <div className="px-4 py-3 border-b border-zinc-800 bg-zinc-800/40 flex items-center gap-2">
-                <span className="text-sm font-semibold text-indigo-400">{stageName}</span>
+                <span className="text-sm font-semibold text-indigo-400">{stageLabel}</span>
                 <span className="text-xs text-zinc-500">{entries.length} event(s)</span>
               </div>
               <table className="w-full text-sm">
@@ -668,6 +873,17 @@ function StageScheduleTab() {
           description="Add a stage above, then assign an event to it to build out the schedule board."
         />
       )}
+
+      {/* Delete stage confirmation modal */}
+      <ConfirmDeleteModal
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDeleteStage}
+        title="Delete Stage?"
+        description={`This permanently deletes "${deleteTarget?.name}" and unschedules any events assigned to it. This cannot be undone.`}
+        isPending={isPendingDelete}
+        error={deleteErr}
+      />
     </div>
   );
 }
@@ -675,6 +891,55 @@ function StageScheduleTab() {
 // ── Page ───────────────────────────────────────────────────────────────────
 
 export default function EventsPage() {
+  const [events, setEvents] = useState<Event[]>([]);
+  const [stages, setStages] = useState<Stage[]>([]);
+  const [schedules, setSchedules] = useState<ScheduleEntry[]>([]);
+
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+
+  // Fetch existing events, stages, and schedules on mount so the tables are
+  // populated immediately instead of only showing items created in the
+  // current browser session.
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      setLoading(true);
+      setLoadError("");
+
+      const [eventsRes, stagesRes, schedulesRes] = await Promise.all([
+        getEvents(),
+        getStages(),
+        getSchedules(),
+      ]);
+
+      if (cancelled) return;
+
+      if (eventsRes.success && eventsRes.data) {
+        setEvents(eventsRes.data as Event[]);
+      } else {
+        setLoadError(eventsRes.message || "Failed to load events.");
+      }
+
+      if (stagesRes.success && stagesRes.data) {
+        setStages(stagesRes.data as Stage[]);
+      } else if (!eventsRes.success === false) {
+        setLoadError((prev) => prev || stagesRes.message || "Failed to load stages.");
+      }
+
+      if (schedulesRes.success && schedulesRes.data) {
+        setSchedules(schedulesRes.data as ScheduleEntry[]);
+      }
+
+      setLoading(false);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <div className="min-h-screen bg-zinc-950 p-6">
       <div className="mx-auto max-w-5xl space-y-6">
@@ -700,10 +965,23 @@ export default function EventsPage() {
           </TabsList>
 
           <TabsContent value="events" className="mt-6">
-            <EventsSquadsTab />
+            <EventsSquadsTab
+              events={events}
+              setEvents={setEvents}
+              loading={loading}
+              loadError={loadError}
+            />
           </TabsContent>
           <TabsContent value="schedule" className="mt-6">
-            <StageScheduleTab />
+            <StageScheduleTab
+              events={events}
+              stages={stages}
+              setStages={setStages}
+              schedules={schedules}
+              setSchedules={setSchedules}
+              loading={loading}
+              loadError={loadError}
+            />
           </TabsContent>
         </Tabs>
       </div>
